@@ -1,90 +1,72 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
-  <title>八段錦姿勢辨識</title>
-
-  <!-- ✅ 載入 Teachable Machine 相容的 tfjs 舊版 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>八段錦動作辨識</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
-
   <style>
     body {
-      font-family: "Noto Sans TC", sans-serif;
-      background-color: #f4f6f8;
+      font-family: 'Arial', sans-serif;
+      background-color: #f0f4f8;
       text-align: center;
       padding: 20px;
     }
-
-    h1 {
-      color: #2c3e50;
-    }
-
     canvas {
       border: 2px solid #2c3e50;
       margin-top: 20px;
     }
-
     #label-container div {
-      font-size: 18px;
+      font-size: 20px;
       margin-top: 10px;
       color: #34495e;
     }
-
     button {
-      margin-top: 20px;
-      padding: 12px 24px;
-      background-color: #3498db;
+      padding: 10px 20px;
+      font-size: 16px;
+      background-color: #2980b9;
       color: white;
       border: none;
-      font-size: 16px;
-      border-radius: 6px;
+      border-radius: 5px;
       cursor: pointer;
-    }
-
-    #error-message {
-      color: red;
       margin-top: 20px;
     }
   </style>
 </head>
 <body>
-  <h1>八段錦姿勢辨識系統</h1>
-  <p>請開啟攝影機並進行動作辨識。</p>
-  <button onclick="init()">啟動系統</button>
-  <div id="webcam-container"></div>
+  <h1>八段錦姿勢辨識</h1>
+  <button type="button" onclick="init()">開始辨識</button>
+  <div><canvas id="canvas"></canvas></div>
   <div id="label-container"></div>
-  <div id="error-message"></div>
 
   <script type="text/javascript">
-    let model, webcam, labelContainer, maxPredictions;
+    let model, webcam, ctx, labelContainer, maxPredictions;
 
     async function init() {
-      const URL = "./";
-      const modelURL = URL + "model.json";
-      const metadataURL = URL + "metadata.json";
+      const modelURL = "model/model.json";
+      const metadataURL = "model/metadata.json";
 
-      try {
-        model = await tmPose.load(modelURL, metadataURL);
-        maxPredictions = model.getTotalClasses();
+      model = await tmPose.load(modelURL, metadataURL);
+      maxPredictions = model.getTotalClasses();
 
-        // 啟用攝影機（使用 tmPose 提供的 Webcam 物件）
-        webcam = new tmPose.Webcam(400, 400, true); // width, height, flip
-        await webcam.setup(); // 啟動 webcam（要求授權）
-        await webcam.play();
-        window.requestAnimationFrame(loop);
+      const size = 400;
+      const flip = true;
+      webcam = new tmPose.Webcam(size, size, flip);
+      await webcam.setup();
+      await webcam.play();
 
-        document.getElementById("webcam-container").appendChild(webcam.canvas);
+      window.requestAnimationFrame(loop);
 
-        labelContainer = document.getElementById("label-container");
-        for (let i = 0; i < maxPredictions; i++) {
-          labelContainer.appendChild(document.createElement("div"));
-        }
+      const canvas = document.getElementById("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      ctx = canvas.getContext("2d");
 
-      } catch (error) {
-        console.error("初始化錯誤：", error);
-        document.getElementById("error-message").innerText =
-          "⚠️ 發生錯誤，請確認模型檔案存在、已授權鏡頭並使用支援的瀏覽器（建議 Chrome + HTTPS）";
+      labelContainer = document.getElementById("label-container");
+      labelContainer.innerHTML = "";
+      for (let i = 0; i < maxPredictions; i++) {
+        labelContainer.appendChild(document.createElement("div"));
       }
     }
 
@@ -97,6 +79,9 @@
     async function predict() {
       const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
       const prediction = await model.predict(posenetOutput);
+
+      ctx.drawImage(webcam.canvas, 0, 0);
+      tmPose.drawPose(pose, ctx);
 
       for (let i = 0; i < maxPredictions; i++) {
         const classPrediction =
