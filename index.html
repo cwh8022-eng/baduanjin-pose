@@ -1,88 +1,95 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Teachable Machine - 八段錦動作辨識</title>
-
-  <!-- ✅ 正確的 tfjs v3.9.0 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js"></script>
-  <!-- ✅ TeachableMachine Pose v0.8 -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
-
+  <meta charset="UTF‑8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>八段錦動作辨識系統</title>
   <style>
     body {
       font-family: 'Arial', sans-serif;
-      background-color: #f0f0f0;
+      background-color: #f0f4f8;
       text-align: center;
       padding: 20px;
     }
-    video, canvas {
-      border: 2px solid #333;
-      margin-top: 10px;
-    }
-    #label-container {
-      margin-top: 20px;
-      font-size: 1.2em;
-      color: #222;
-    }
     button {
-      padding: 10px 20px;
-      margin-top: 20px;
+      padding: 12px 24px;
       font-size: 16px;
       background-color: #3498db;
       color: white;
       border: none;
-      border-radius: 5px;
+      border-radius: 6px;
       cursor: pointer;
+      margin-top: 15px;
     }
     button:hover {
       background-color: #2980b9;
     }
+    #canvas-container {
+      position: relative;
+      display: inline-block;
+      margin-top: 20px;
+    }
+    canvas {
+      border: 3px solid #333;
+    }
+    #label-container {
+      margin-top: 20px;
+      font-size: 1.1em;
+      color: #2c3e50;
+    }
   </style>
+
+  <!-- 使用相容版本的 TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js"></script>
+  <!-- Teachable Machine Pose -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 </head>
 <body>
-  <h1>八段錦動作辨識系統</h1>
-  <p>tfjs 版本：<span id="tfjs-version"></span></p>
-  <button onclick="init()">啟動模型與鏡頭</button>
-  <div><canvas id="canvas"></canvas></div>
+  <h1>八段錦動作辨識</h1>
+  <p>tfjs 版本：<span id="tfjs-version">—</span></p>
+  <button onclick="init()">開始辨識</button>
+  <div id="canvas-container">
+    <canvas id="canvas"></canvas>
+  </div>
   <div id="label-container"></div>
 
-  <script type="text/javascript">
+  <script>
     document.getElementById('tfjs-version').innerText = tf.version.tfjs;
 
-    const URL = "https://teachablemachine.withgoogle.com/models/YOUR_MODEL_URL/"; // ←請換成你自己的 model 連結
+    const MODEL_URL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
     let model, webcam, ctx, labelContainer, maxPredictions;
 
     async function init() {
-      const modelURL = URL + "model.json";
-      const metadataURL = URL + "metadata.json";
+      try {
+        const modelURL = MODEL_URL + "model.json";
+        const metadataURL = MODEL_URL + "metadata.json";
 
-      // 載入模型
-      model = await tmPose.load(modelURL, metadataURL);
-      maxPredictions = model.getTotalClasses();
+        model = await tmPose.load(modelURL, metadataURL);
+        maxPredictions = model.getTotalClasses();
 
-      // 設定攝影機
-      const size = 400;
-      const flip = true; // 是否鏡像畫面
-      webcam = new tmPose.Webcam(size, size, flip);
-      await webcam.setup(); // 啟用攝影機
-      await webcam.play();
-      window.requestAnimationFrame(loop);
+        const size = 400;
+        webcam = new tmPose.Webcam(size, size, true);
+        await webcam.setup();
+        await webcam.play();
+        window.requestAnimationFrame(loop);
 
-      // 顯示畫面
-      document.getElementById("canvas").width = size;
-      document.getElementById("canvas").height = size;
-      ctx = document.getElementById("canvas").getContext("2d");
+        const canvas = document.getElementById('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        ctx = canvas.getContext('2d');
 
-      labelContainer = document.getElementById("label-container");
-      labelContainer.innerHTML = "";
-      for (let i = 0; i < maxPredictions; i++) {
-        labelContainer.appendChild(document.createElement("div"));
+        labelContainer = document.getElementById('label-container');
+        labelContainer.innerHTML = "";
+        for (let i = 0; i < maxPredictions; i++) {
+          labelContainer.appendChild(document.createElement('div'));
+        }
+      } catch (err) {
+        console.error("初始化錯誤：", err);
+        alert("載入模型或攝影機失敗，請確認模型網址正確並使用支援的瀏覽器。");
       }
     }
 
-    async function loop(timestamp) {
+    async function loop() {
       webcam.update();
       await predict();
       window.requestAnimationFrame(loop);
@@ -92,14 +99,12 @@
       const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
       const prediction = await model.predict(posenetOutput);
 
-      // 畫出姿勢點
       ctx.drawImage(webcam.canvas, 0, 0);
       tmPose.drawPose(pose, ctx);
 
       for (let i = 0; i < maxPredictions; i++) {
-        const classPrediction =
-          prediction[i].className + ": " + (prediction[i].probability * 100).toFixed(2) + "%";
-        labelContainer.childNodes[i].innerHTML = classPrediction;
+        const p = prediction[i];
+        labelContainer.childNodes[i].innerText = `${p.className}: ${(p.probability * 100).toFixed(2)}%`;
       }
     }
   </script>
