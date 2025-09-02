@@ -3,37 +3,76 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦極簡辨識（tfjs 1.7.4）</title>
-
-  <!-- ★ 關鍵：tfjs 1.7.4，原生含 tf.fromPixels -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js?v=tf174"></script>
-  <!-- tmPose 0.8（UMD） -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
-
+  <title>八段錦極簡辨識（動態相容載入）</title>
   <style>
     body{font-family:Arial,sans-serif;text-align:center;background:#f6f8fb;margin:0;padding:24px}
     h1{margin:8px 0 12px}
-    #ver{color:#666;margin-bottom:8px}
+    #ver{color:#666;margin:8px 0}
     #err{color:#c0392b;font-weight:700;margin:8px 0}
     canvas{border:2px solid #2c3e50;border-radius:10px}
     #label-container div{font-size:18px;margin-top:8px}
     button{margin:12px 0;padding:10px 20px;font-size:16px;background:#2980b9;color:#fff;border:0;border-radius:6px;cursor:pointer}
+    #startBtn{display:none}
   </style>
 </head>
 <body>
   <h1>八段錦極簡辨識</h1>
-  <div id="ver"></div>
+  <div id="ver">初始化中…</div>
   <div id="err"></div>
   <button id="startBtn">啟動辨識</button><br/>
   <canvas id="canvas" width="400" height="400"></canvas>
   <div id="label-container"></div>
 
   <script>
-    // 顯示版本（應看到 1.7.4 並且 tf.fromPixels 為 function）
-    document.getElementById('ver').textContent =
-      "tfjs 版本：" + (tf?.version?.tfjs ?? "未載入") +
-      "；has tf.fromPixels = " + (typeof tf.fromPixels === "function");
+    // --------- 動態載入工具 ---------
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src + (src.includes('?') ? '&' : '?') + 'cb=' + Date.now(); // bust cache
+        s.onload = () => resolve(src);
+        s.onerror = () => reject(new Error('載入失敗：' + src));
+        document.head.appendChild(s);
+      });
+    }
 
+    // --------- 先載 TFJS（確保有 fromPixels）再載 tmPose ---------
+    (async () => {
+      const verEl = document.getElementById('ver');
+      const errEl = document.getElementById('err');
+
+      try {
+        // 1) 嘗試載 tfjs 1.3.2（Teachable Machine 早期範例常用）
+        await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.2/dist/tf.min.js');
+        if (!(window.tf && typeof tf.fromPixels === 'function')) {
+          // 2) 若仍沒有 fromPixels，則退回到 1.7.4（亦相容）
+          await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js');
+        }
+
+        // 最終檢查
+        if (!(window.tf && typeof tf.fromPixels === 'function')) {
+          throw new Error('tf.fromPixels 仍不可用。請以無痕視窗開啟或確認沒有其他擴充程式覆蓋 TF。');
+        }
+
+        verEl.textContent = `tfjs 版本：${tf.version.tfjs}；has tf.fromPixels = ${typeof tf.fromPixels === 'function'}`;
+
+        // 3) 載入 tmPose（0.8 UMD）
+        await loadScript('https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js');
+
+        if (!window.tmPose) {
+          throw new Error('teachablemachine/pose 未載入。');
+        }
+
+        // 顯示開始按鈕
+        document.getElementById('startBtn').style.display = 'inline-block';
+      } catch (e) {
+        console.error(e);
+        errEl.textContent = '⚠️ 初始化失敗：' + e.message;
+      }
+    })();
+  </script>
+
+  <script>
+    // --------- app 主程式 ---------
     const MODEL_ROOT = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
     let model, webcam, ctx, labelContainer, maxPredictions;
 
@@ -44,16 +83,13 @@
       errEl.textContent = "";
 
       try {
-        // backend 準備（1.x 亦可）
+        // backend 準備（1.x 也支援）
         try { await tf.setBackend('webgl'); } catch { await tf.setBackend('cpu'); }
         await tf.ready();
-        console.log("backend =", tf.getBackend(),
-                    "tf.fromPixels =", typeof tf.fromPixels);
+        console.log('backend =', tf.getBackend(), 'tf.fromPixels =', typeof tf.fromPixels);
 
         // 載入模型
-        const modelURL = MODEL_ROOT + "model.json";
-        const metadataURL = MODEL_ROOT + "metadata.json";
-        model = await tmPose.load(modelURL, metadataURL);
+        model = await tmPose.load(MODEL_ROOT + "model.json", MODEL_ROOT + "metadata.json");
         maxPredictions = model.getTotalClasses();
 
         // 啟用攝影機（需 HTTPS 或 localhost）
@@ -74,7 +110,7 @@
       } catch (e) {
         console.error(e);
         errEl.textContent = "⚠️ 無法啟動：" + e.message +
-          "（請確認 HTTPS/localhost、允許相機；仍異常請用無痕視窗）";
+          "（請確認 HTTPS/localhost、允許相機、或用無痕視窗強制重整）";
       }
     }
 
