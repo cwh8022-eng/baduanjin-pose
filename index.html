@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Teachable Machine - 八段錦動作辨識</title>
 
-  <!-- ✅ 固定相容版本：tfjs 3.9.0（先載入） -->
+  <!-- ✅ 固定相容版本（先載入 tfjs） -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js"></script>
-  <!-- ✅ 固定相容版本：Teachable Machine Pose 0.8（後載入） -->
+  <!-- ✅ 瀏覽器 UMD 版（再載入 tmPose 0.8） -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
   <style>
@@ -26,8 +26,8 @@
       margin-top: 20px; padding: 10px 20px; font-size: 16px;
       background-color: #2980b9; color: white; border: none; border-radius: 5px; cursor: pointer;
     }
-    #err { color: #c0392b; margin-top: 12px; }
-    #ver { color: #7f8c8d; font-size: 14px; margin-top: 6px; }
+    #ver { margin-top: 8px; color: #7f8c8d; font-size: 14px; }
+    #err { margin-top: 8px; color: #c0392b; }
   </style>
 </head>
 <body>
@@ -39,8 +39,9 @@
   <div id="label-container"></div>
 
   <script>
-    // 顯示目前 tfjs 版本，確認載入正確
-    document.getElementById('ver').innerText = "tfjs 版本：" + (tf && tf.version ? tf.version.tfjs : "未載入");
+    // 顯示 tfjs 版本，確認載入成功
+    document.getElementById('ver').innerText =
+      "tfjs 版本：" + (window.tf && tf.version ? tf.version.tfjs : "未載入");
 
     let model, webcam, ctx, labelContainer, maxPredictions;
 
@@ -49,23 +50,25 @@
       const metadataURL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/metadata.json";
 
       try {
+        if (!window.tmPose) {
+          throw new Error("tmPose 未載入，請確認已載入 teachablemachine/pose 0.8 的 UMD 檔。");
+        }
+
         // 1) 載入模型
         model = await tmPose.load(modelURL, metadataURL);
         maxPredictions = model.getTotalClasses();
 
-        // 2) 啟用攝影機（必須在 HTTPS 或 localhost）
+        // 2) 啟用攝影機（需 HTTPS 或 localhost）
         const size = 400;
         const flip = true;
         webcam = new tmPose.Webcam(size, size, flip);
-
-        await webcam.setup(); // 會跳出要求權限
+        await webcam.setup();   // 會跳出要求權限
         await webcam.play();
         window.requestAnimationFrame(loop);
 
         // 3) 畫布與標籤
         const canvas = document.getElementById("canvas");
-        canvas.width = size;
-        canvas.height = size;
+        canvas.width = size; canvas.height = size;
         ctx = canvas.getContext("2d");
 
         labelContainer = document.getElementById("label-container");
@@ -76,7 +79,7 @@
       } catch (e) {
         console.error(e);
         document.getElementById("err").innerText =
-          "⚠️ 無法啟動：請確認已允許攝影機、以 HTTPS 或 localhost 開啟、且網頁未封鎖相機。";
+          "⚠️ 無法啟動：請確認（1）允許攝影機、（2）使用 HTTPS 或 localhost、（3）未封鎖相機、（4）版本未被快取舊檔。";
       }
     }
 
