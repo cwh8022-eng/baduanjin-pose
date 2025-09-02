@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識（相容修補版）</title>
+  <title>八段錦動作辨識（PoseNet + 本地分類器）</title>
   <style>
     :root{color-scheme:light dark}
     body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;margin:0;padding:20px;text-align:center}
@@ -22,36 +22,16 @@
     .bar-fill{height:100%;width:0%;background:#10b981;transition:width .12s linear}
     .bar-pct{width:72px;text-align:right;color:#374151;font-variant-numeric:tabular-nums}
     @media (max-width:900px){.wrap{grid-template-columns:1fr}}
+    video{position:absolute;left:-9999px;top:-9999px;width:0;height:0} /* 影像來源隱藏 */
   </style>
 
-  <!-- 1) 只載「一次」 tfjs 1.7.4 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
-
-  <!-- 2) shim：補 tf.fromPixels，並把 Pt 指到 tf，確保 tmPose 內部可用 -->
-  <script>
-    (function shimFromPixelsAndPt(){
-      if (window.tf) {
-        if (typeof tf.fromPixels !== 'function' &&
-            tf.browser && typeof tf.browser.fromPixels === 'function') {
-          try { Object.defineProperty(tf,'fromPixels',{value:tf.browser.fromPixels.bind(tf.browser),writable:false,configurable:false}); }
-          catch(_) { tf.fromPixels = tf.browser.fromPixels.bind(tf.browser); }
-          console.log('[shim] tf.fromPixels <- tf.browser.fromPixels');
-        }
-        // 讓 tmPose 內部拿到的 Pt 指向同一個 tf
-        if (!window.Pt) {
-          try { Object.defineProperty(window,'Pt',{value:tf,writable:false,configurable:false}); }
-          catch(_) { window.Pt = tf; }
-          console.log('[shim] window.Pt = tf');
-        }
-      }
-    })();
-  </script>
-
-  <!-- 3) 再載 tmPose -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <!-- 使用 tfjs 3.11（穩）-->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
+  <!-- 使用 PoseNet 抓關鍵點（不載 tmPose）-->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet@2.2.1/dist/posenet.min.js"></script>
 </head>
 <body>
-  <h1>八段錦動作辨識</h1>
+  <h1>八段錦動作辨識（PoseNet + 本地分類器）</h1>
   <div id="ver">初始化中…</div>
 
   <button id="btnCheck" class="btn">① 相機自檢</button>
@@ -69,6 +49,9 @@
     </div>
   </div>
 
+  <!-- 隱藏的影像來源 -->
+  <video id="video" playsinline autoplay muted></video>
+
 <script>
 (function(){
   // === 依序顯示的八段錦八式（請改成與 metadata.json 裡 labels 完全一致）===
@@ -85,22 +68,23 @@
 
   const verEl = document.getElementById('ver');
   const msgEl = document.getElementById('msg');
+  const video = document.getElementById('video');
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
 
   const modelURL    = './model.json';
   const metadataURL = './metadata.json';
 
-  let model, webcam, maxPred=0, smooth = Object.fromEntries(EIGHT.map(n=>[n,0]));
+  let classifier, labels = [], posenetModel, running=false, flip=true;
+  let smooth = Object.fromEntries(EIGHT.map(n=>[n,0]));
 
-  function setVer(){
-    verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | has fromPixels=${typeof tf.fromPixels==='function'}`;
-  }
-  setVer();
+  verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | engine=${tf.getBackend()||'-'}`;
 
   function info(t, ok=false){ msgEl.style.color = ok?'#27ae60':'#c0392b'; msgEl.textContent = t; }
+  const $ = id=>document.getElementById(id);
+  const cssId = n => n.replace(/\s+/g,'-').replace(/[^-\w]/g,'');
 
-  document.getElementById('btnCheck').onclick = async ()=>{
+  $('btnCheck').onclick = async ()=>{
     info('');
     try{
       if(!window.isSecureContext) throw new Error('此頁面不是 HTTPS 或 localhost，瀏覽器會封鎖相機');
@@ -112,35 +96,42 @@
     }
   };
 
-  document.getElementById('btnStart').onclick = async ()=>{
+  $('btnStart').onclick = async ()=>{
     try{
-      // 仍再保險一次
-      if (typeof tf.fromPixels !== 'function') {
-        throw new Error('tf.fromPixels 不可用（請以 Chrome「訪客模式」或停用擴充功能測試）');
-      }
-
+      info('載入中…');
       try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
       await tf.ready();
 
-      // 檔案 OK 檢查
+      // 檔案檢查
       await fetch(modelURL,{cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`model.json HTTP ${r.status}`); });
-      await fetch(metadataURL,{cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`metadata.json HTTP ${r.status}`); });
+      const meta = await fetch(metadataURL,{cache:'no-store'}).then(r=>r.json());
+      labels = meta.labels || meta.classes || [];
+      if (labels.length === 0) throw new Error('metadata.json 缺少 labels');
 
-      model = await tmPose.load(modelURL, metadataURL);
-      maxPred = model.getTotalClasses();
+      // 載入分類器（你的本地 model.json）
+      classifier = await tf.loadLayersModel(modelURL);
 
-      // 建立 tmPose.Webcam（此時 Pt.fromPixels / tf.fromPixels 已就緒）
-      webcam = new tmPose.Webcam(400, 400, true);
-      await webcam.setup();
-      await webcam.play();
+      // 載入 PoseNet
+      posenetModel = await posenet.load({
+        architecture: 'MobileNetV1',
+        outputStride: 16,
+        inputResolution: { width: 257, height: 257 },
+        multiplier: 0.75
+      });
 
-      // 畫布準備
+      // 啟用相機
+      const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user' }, audio:false });
+      video.srcObject = stream;
+      await video.play();
+
+      // 畫布尺寸
       canvas.width = 400; canvas.height = 400;
 
-      // 固定順序的分類條
+      // 建立固定順序的分類條
       buildBars(EIGHT);
 
       info('✅ 模型載入完成，相機啟動成功！', true);
+      running = true;
       requestAnimationFrame(loop);
     }catch(e){
       info('❌ 無法載入：\n' + (e.message||e.toString()));
@@ -149,9 +140,8 @@
   };
 
   function buildBars(names){
-    const bars = document.getElementById('bars');
-    bars.innerHTML='';
-    for(const n of names){
+    const bars = $('bars'); bars.innerHTML='';
+    names.forEach(n=>{
       const id = cssId(n);
       const row = document.createElement('div');
       row.className='bar';
@@ -160,47 +150,99 @@
         <div class="bar-track"><div class="bar-fill" id="fill-${id}" style="width:0%"></div></div>
         <div class="bar-pct" id="pct-${id}">0.00%</div>`;
       bars.appendChild(row);
-    }
+    });
   }
-  const cssId = n => n.replace(/\s+/g,'-').replace(/[^-\w]/g,'');
 
   async function loop(){
-    webcam.update();
-    await predict();
+    if(!running) return;
+    await predictOnce();
     requestAnimationFrame(loop);
   }
 
-  async function predict(){
-    const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
-    const preds = await model.predict(posenetOutput);
+  // 將 PoseNet 17 個關鍵點 (x,y) 正規化到 [0,1]，組成 34 維向量
+  function poseToInput(pose, w, h){
+    const arr = [];
+    for(const kp of pose.keypoints){
+      const x = Math.min(Math.max(kp.position.x / w, 0), 1);
+      const y = Math.min(Math.max(kp.position.y / h, 0), 1);
+      arr.push(x, y);
+    }
+    return tf.tensor2d([arr], [1, 34]);
+  }
 
-    ctx.drawImage(webcam.canvas, 0, 0);
-    if (pose) {
-      tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
-      tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
+  async function predictOnce(){
+    // 顯示畫面
+    if (flip){
+      ctx.save();
+      ctx.scale(-1,1);
+      ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
+      ctx.restore();
+    } else {
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
     }
 
-    // 將當前預測映射到固定順序
-    const map = Object.fromEntries(preds.map(p=>[p.className, p.probability]));
+    // 估計姿勢
+    const pose = await posenetModel.estimateSinglePose(video, {
+      flipHorizontal: flip
+    });
+
+    // 畫關鍵點與骨架
+    drawKeypoints(pose.keypoints, 0.5, ctx);
+    drawSkeleton(pose.keypoints, 0.5, ctx);
+
+    // 組成分類器輸入並推論
+    const inp = poseToInput(pose, video.videoWidth, video.videoHeight);
+    const pred = tf.tidy(()=> classifier.predict(inp));
+    const probs = Array.from(await pred.data());
+    pred.dispose(); inp.dispose();
+
+    // 對齊 metadata 的 labels → 映射到固定 EIGHT 順序
+    const map = {};
+    labels.forEach((name,i)=> map[name] = probs[i] || 0);
+
     const alpha = 0.35;
     let topName = EIGHT[0], topProb = 0;
 
-    for (const name of EIGHT){
-      const prob = map[name] ?? 0;
-      const val  = alpha*prob + (1-alpha)*(smooth[name]||0);
+    for(const name of EIGHT){
+      const p = map[name] ?? 0;
+      const val = alpha*p + (1-alpha)*(smooth[name]||0);
       smooth[name] = val;
 
       const pct = (val*100);
-      const id  = cssId(name);
+      const id  = name.replace(/\s+/g,'-').replace(/[^-\w]/g,'');
       const fill = document.getElementById(`fill-${id}`);
       const txt  = document.getElementById(`pct-${id}`);
       if (fill) fill.style.width = `${pct.toFixed(2)}%`;
       if (txt)  txt.textContent  = `${pct.toFixed(2)}%`;
 
-      if (prob > topProb){ topProb = prob; topName = name; }
+      if (p > topProb){ topProb = p; topName = name; }
     }
-    document.getElementById('topClass').textContent =
-      `目前辨識：${topName}（${(topProb*100).toFixed(2)}%）`;
+    $('topClass').textContent = `目前辨識：${topName}（${(topProb*100).toFixed(2)}%）`;
+  }
+
+  /* ====== 簡易繪製工具（仿 tmPose 畫法） ====== */
+  function toTuple({y, x}) { return [x, y]; }
+  function drawKeypoints(keypoints, minConfidence, ctx) {
+    keypoints.forEach(kp=>{
+      if (kp.score < minConfidence) return;
+      const {y, x} = kp.position;
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, 2*Math.PI);
+      ctx.fillStyle = 'rgba(16,185,129,0.9)'; ctx.fill();
+    });
+  }
+  const adjacentKeyPoints = [
+    [5,7],[7,9],[6,8],[8,10],[5,6],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]
+  ];
+  function drawSkeleton(keypoints, minConfidence, ctx) {
+    adjacentKeyPoints.forEach(([i,j])=>{
+      const kp1 = keypoints[i], kp2 = keypoints[j];
+      if (kp1.score < minConfidence || kp2.score < minConfidence) return;
+      ctx.beginPath();
+      const [x1,y1] = toTuple(kp1.position);
+      const [x2,y2] = toTuple(kp2.position);
+      ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+      ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(59,130,246,0.9)'; ctx.stroke();
+    });
   }
 })();
 </script>
