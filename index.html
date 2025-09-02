@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>八段錦辨識（單檔・隔離＋放寬CSP）</title>
+  <title>八段錦辨識（單檔・隔離＋fromPixels 修正）</title>
 
   <!-- 放寬外層 CSP：允許 inline script，避免內嵌程式被擋 -->
   <meta http-equiv="Content-Security-Policy"
@@ -12,8 +12,7 @@
                  connect-src 'self' https://teachablemachine.withgoogle.com https://storage.googleapis.com https://cdn.jsdelivr.net;
                  img-src 'self' data:;
                  style-src 'self' 'unsafe-inline';
-                 media-src *;
-                 frame-ancestors 'self';">
+                 media-src *;">
 
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Arial,Helvetica,sans-serif;
@@ -30,7 +29,7 @@
   <h1>八段錦動作辨識（沙箱隔離，避免 TFJS 衝突）</h1>
   <div id="err"></div>
 
-  <!-- 允許相機；保留 allow-same-origin 讓模型可下載；仍依靠 CSP 限制來源 -->
+  <!-- 允許相機；同源讓模型可下載；真正隔離靠內頁只載對的 tfjs 版本 -->
   <iframe id="runner"
           sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-modals"
           allow="camera *; microphone *"
@@ -38,16 +37,16 @@
 
   <p class="tips">
     請在 <b>HTTPS</b> 或 <b>localhost</b> 開啟，按「啟動辨識」並允許相機。<br>
-    若有外掛干擾，請用 <b>訪客模式</b> 或無痕視窗（外掛勿允許在無痕執行）。
+    若仍被外掛干擾，請用 <b>訪客模式</b> 或無痕視窗（外掛勿允許在無痕執行）。
   </p>
 </div>
 
 <script>
-  // 你的 Teachable Machine 模型 ID（可自行更換）
+  // 你的 Teachable Machine 模型 ID
   const TM_MODEL_ID = "jX4OKw-11";
   const MODEL_URL = `https://teachablemachine.withgoogle.com/models/${TM_MODEL_ID}/`;
 
-  // ★ 內頁也加上允許 inline 的 CSP，避免「Refused to execute inline script」
+  // 內頁 CSP（允許 inline，避免被擋）
   const innerCSP = `
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self';
@@ -57,6 +56,7 @@
                  style-src 'self' 'unsafe-inline';
                  media-src *;">`;
 
+  // ★★★ 注意：這裡所有 </script> 都寫成 <\/script> 以免提前關閉外層 <script> ★★★
   const srcdoc = `<!DOCTYPE html>
 <html lang='zh-Hant'>
 <head>
@@ -82,83 +82,4 @@ ${innerCSP}
   <canvas id="c" width="400" height="400"></canvas>
   <div id="labels"></div>
 
-  <!-- 固定相容版本：tfjs 1.7.4 + tmPose 0.8 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
-
-  <script>
-  (function(){
-    const MODEL = "${MODEL_URL}";
-    let model, webcam, ctx, labels, maxPred;
-
-    // 顯示版本與 fromPixels 狀態（1.7.4 應為 function）
-    (function(){
-      const v = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : "未載入";
-      const has = (typeof tf.fromPixels === "function");
-      document.getElementById('ver').textContent = 'tfjs 版本：' + v + '；tf.fromPixels = ' + has;
-    })();
-
-    document.getElementById('start').onclick = init;
-
-    async function init(){
-      const errEl = document.getElementById('err'); errEl.textContent = '';
-      try{
-        // 1) backend
-        try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
-        await tf.ready();
-        if(typeof tf.fromPixels !== 'function'){
-          throw new Error('tf.fromPixels 不可用（沙箱內不應發生）');
-        }
-
-        // 2) 載入模型
-        model = await tmPose.load(MODEL + 'model.json', MODEL + 'metadata.json');
-        maxPred = model.getTotalClasses();
-
-        // 3) 啟用相機
-        const size = 400;
-        webcam = new tmPose.Webcam(size, size, true);
-        await webcam.setup();
-        await webcam.play();
-        requestAnimationFrame(loop);
-
-        // 4) 畫布/標籤
-        const canvas = document.getElementById('c');
-        ctx = canvas.getContext('2d');
-        labels = document.getElementById('labels'); labels.innerHTML='';
-        for(let i=0;i<maxPred;i++){ labels.appendChild(document.createElement('div')); }
-
-      }catch(e){
-        console.error(e);
-        errEl.textContent = '⚠️ 無法啟動：' + e.message + '（請確認 HTTPS/localhost 並允許相機）';
-      }
-    }
-
-    async function loop(){
-      webcam.update();
-      await predict();
-      requestAnimationFrame(loop);
-    }
-
-    async function predict(){
-      const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
-      const pred = await model.predict(posenetOutput);
-
-      ctx.drawImage(webcam.canvas, 0, 0);
-      if(pose){
-        tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
-        tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
-      }
-      for(let i=0;i<pred.length;i++){
-        labels.childNodes[i].textContent =
-          pred[i].className + ': ' + (pred[i].probability*100).toFixed(2) + '%';
-      }
-    }
-  })();
-  </script>
-</body>
-</html>`;
-
-  document.getElementById('runner').srcdoc = srcdoc;
-</script>
-</body>
-</html>
+  <!-- 固定相容版本：tfjs 1.7.4（
