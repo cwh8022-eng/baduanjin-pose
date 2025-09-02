@@ -1,55 +1,133 @@
-<script>
-  document.getElementById('tfjs-version').innerText = tf.version.tfjs;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Baduanjin Pose Detection</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <style>
+    body {
+      font-family: 'Arial', sans-serif;
+      background: #f0f4f8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+    h1 {
+      color: #2c3e50;
+    }
+    canvas {
+      border: 2px solid #2c3e50;
+      margin-top: 20px;
+    }
+    #label-container div {
+      font-size: 18px;
+      margin-top: 10px;
+      color: #34495e;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      background-color: #2980b9;
+      color: white;
+      border: none;
+      cursor: pointer;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Baduanjin Pose Detection</h1>
+  <button type="button" onclick="init()">Start</button>
+  <div><canvas id="canvas"></canvas></div>
+  <div id="label-container"></div>
 
-  const MODEL_URL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
-  let model, webcam, ctx, labelContainer, maxPredictions;
+  <script type="text/javascript">
+    const URL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
+    let model, webcam, ctx, labelContainer, maxPredictions;
 
-  async function init() {
-    try {
-      const modelURL = MODEL_URL + "model.json";
-      const metadataURL = MODEL_URL + "metadata.json";
+    async function init() {
+      const modelURL = URL + "model.json";
+      const metadataURL = URL + "metadata.json";
 
+      // Load the model and metadata
       model = await tmPose.load(modelURL, metadataURL);
       maxPredictions = model.getTotalClasses();
 
+      // Setup webcam
       const size = 400;
-      webcam = new tmPose.Webcam(size, size, true);
+      const flip = true;
+      webcam = new tmPose.Webcam(size, size, flip);
       await webcam.setup();
       await webcam.play();
       window.requestAnimationFrame(loop);
 
-      const canvas = document.getElementById('canvas');
-      canvas.width = size;
-      canvas.height = size;
-      ctx = canvas.getContext('2d');
+      // Append elements to the DOM
+      document.getElementById("canvas").width = size;
+      document.getElementById("canvas").height = size;
+      ctx = document.getElementById("canvas").getContext("2d");
 
-      labelContainer = document.getElementById('label-container');
+      labelContainer = document.getElementById("label-container");
       labelContainer.innerHTML = "";
       for (let i = 0; i < maxPredictions; i++) {
-        labelContainer.appendChild(document.createElement('div'));
+        labelContainer.appendChild(document.createElement("div"));
       }
-    } catch (err) {
-      console.error("初始化錯誤：", err);
-      alert("載入模型或攝影機失敗，請確認模型網址正確並使用支援的瀏覽器。");
     }
-  }
 
-  async function loop() {
-    webcam.update();
-    await predict();
-    window.requestAnimationFrame(loop);
-  }
-
-  async function predict() {
-    const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
-    const prediction = await model.predict(posenetOutput);
-
-    ctx.drawImage(webcam.canvas, 0, 0);
-    tmPose.drawPose(pose, ctx);
-
-    for (let i = 0; i < maxPredictions; i++) {
-      const p = prediction[i];
-      labelContainer.childNodes[i].innerText = `${p.className}: ${(p.probability * 100).toFixed(2)}%`;
+    async function loop(timestamp) {
+      webcam.update();
+      await predict();
+      window.requestAnimationFrame(loop);
     }
-  }
-</script>
+
+    async function predict() {
+      const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+      const prediction = await model.predict(posenetOutput);
+
+      // Draw the webcam image and pose keypoints
+      ctx.drawImage(webcam.canvas, 0, 0);
+      if (pose) {
+        drawKeypoints(pose.keypoints, 0.6, ctx);
+        drawSkeleton(pose.keypoints, 0.6, ctx);
+      }
+
+      // Show prediction
+      for (let i = 0; i < maxPredictions; i++) {
+        const classPrediction = prediction[i].className + ": " + (prediction[i].probability * 100).toFixed(2) + "%";
+        labelContainer.childNodes[i].innerText = classPrediction;
+      }
+    }
+
+    // Draw keypoints and skeleton
+    function drawKeypoints(keypoints, minConfidence, ctx) {
+      for (let i = 0; i < keypoints.length; i++) {
+        const keypoint = keypoints[i];
+        if (keypoint.score > minConfidence) {
+          const { y, x } = keypoint.position;
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0, 2 * Math.PI);
+          ctx.fillStyle = "Red";
+          ctx.fill();
+        }
+      }
+    }
+
+    function drawSkeleton(keypoints, minConfidence, ctx) {
+      const adjacentKeyPoints = tmPose.getAdjacentKeyPoints(keypoints, minConfidence);
+      adjacentKeyPoints.forEach((keypoints) => {
+        drawSegment(keypoints[0].position, keypoints[1].position, ctx);
+      });
+    }
+
+    function drawSegment(from, to, ctx) {
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "Green";
+      ctx.stroke();
+    }
+  </script>
+</body>
+</html>
