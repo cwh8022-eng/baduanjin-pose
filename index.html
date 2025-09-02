@@ -3,207 +3,109 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識（固定八式名稱）</title>
+  <title>八段錦動作辨識</title>
 
-  <!-- 與 Teachable Machine Pose 相容且內建 fromPixels：最穩定 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+  <!-- ✅ 固定相容版本 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
   <style>
-    body { font-family: Arial, sans-serif; background:#f0f4f8; padding:20px; text-align:center; }
-    h1 { color:#1f2937; margin:0 0 12px; }
-    canvas { border:2px solid #374151; border-radius:10px; margin:10px 0 16px; }
-    .row { width:420px; max-width:92vw; margin:8px auto; text-align:left; }
-    .name { margin-bottom:4px; color:#374151; font-weight:600; }
-    .track { height:22px; background:#e5e7eb; border-radius:999px; overflow:hidden; }
-    .bar { height:100%; width:0%; background:#2563eb; color:#fff; line-height:22px; text-align:right; padding-right:8px; transition:width .15s linear; }
-    button { margin-top:6px; padding:9px 16px; border:0; border-radius:8px; background:#10b981; color:#fff; cursor:pointer; }
-    .hint { color:#6b7280; margin-bottom:8px; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f4f8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+    h1 { color: #2c3e50; }
+    canvas {
+      border: 2px solid #2c3e50;
+      margin-top: 20px;
+    }
+    #label-container div {
+      font-size: 18px;
+      margin-top: 5px;
+      color: #34495e;
+    }
+    button {
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 16px;
+      background-color: #2980b9;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
   <h1>八段錦動作辨識</h1>
-  <div class="hint">請於 HTTPS 或 localhost 開啟，允許攝影機。</div>
   <button onclick="init()">啟動辨識</button>
+  <div><canvas id="canvas"></canvas></div>
+  <div id="label-container"></div>
 
-  <div><canvas id="canvas" width="400" height="400"></canvas></div>
+  <script>
+    let model, webcam, ctx, labelContainer, maxPredictions;
 
-  <!-- 固定八式（顯示順序） -->
-  <div id="bars">
-    <!-- 由程式動態插入八條 -->
-  </div>
+    async function init() {
+      // 🔧 自動偵測目前頁面的資料夾，確保載入正確路徑
+      const BASE =
+        location.origin +
+        (location.pathname.endsWith('/')
+          ? location.pathname
+          : location.pathname.replace(/[^/]+$/, '/'));
 
-<script>
-  let model, webcam, ctx, maxPredictions;
+      const modelURL    = BASE + "model.json";
+      const metadataURL = BASE + "metadata.json";
+      console.log("[model paths]", { modelURL, metadataURL });
 
-  // 固定顯示的八招（順序）
-  const TARGETS = [
-    { key: 'D1', name: '雙手托天理三焦' },
-    { key: 'D2', name: '左右開弓似射鵰' },
-    { key: 'D3', name: '調理脾胃須單舉' },
-    { key: 'D4', name: '五勞七傷往後瞧' },
-    { key: 'D5', name: '搖頭擺尾去心火' },
-    { key: 'D6', name: '兩手攀足固腎腰' },
-    { key: 'D7', name: '攢拳怒目增氣力' },
-    { key: 'D8', name: '背後七顛百病消' }
-  ];
+      model = await tmPose.load(modelURL, metadataURL);
+      maxPredictions = model.getTotalClasses();
 
-  // 關鍵詞 -> 對應哪一招（盡量包住常見寫法差異）
-  const KEYWORD_MAP = [
-    { token: '雙手托天', target: 'D1' },
-    { token: '托天',     target: 'D1' },
-    { token: '開弓',     target: 'D2' },
-    { token: '射雕',     target: 'D2' }, // 有人寫雕/鵰
-    { token: '射鵰',     target: 'D2' },
-    { token: '單舉',     target: 'D3' },
-    { token: '脾胃',     target: 'D3' },
-    { token: '往後瞧',   target: 'D4' },
-    { token: '七傷',     target: 'D4' },
-    { token: '擺尾',     target: 'D5' },
-    { token: '去心火',   target: 'D5' },
-    { token: '攀足',     target: 'D6' },
-    { token: '腎腰',     target: 'D6' },
-    { token: '攢拳',     target: 'D7' },
-    { token: '增氣力',   target: 'D7' },
-    { token: '七顛',     target: 'D8' },
-    { token: '百病消',   target: 'D8' }
-  ];
+      const size = 400;
+      const flip = true;
+      webcam = new tmPose.Webcam(size, size, flip);
+      await webcam.setup();
+      await webcam.play();
+      window.requestAnimationFrame(loop);
 
-  // 生成固定八條 UI
-  function buildBars() {
-    const container = document.getElementById('bars');
-    container.innerHTML = '';
-    TARGETS.forEach((t, i) => {
-      const row = document.createElement('div'); row.className = 'row';
-      const name = document.createElement('div'); name.className = 'name'; name.textContent = `${i+1}. ${t.name}`;
-      const track = document.createElement('div'); track.className = 'track';
-      const bar = document.createElement('div'); bar.className = 'bar'; bar.id = `bar-${t.key}`; bar.textContent = '0.0%';
-      track.appendChild(bar);
-      row.appendChild(name); row.appendChild(track);
-      container.appendChild(row);
-    });
-  }
+      const canvas = document.getElementById("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      ctx = canvas.getContext("2d");
 
-  function normalizeLabel(s) {
-    if (!s) return '';
-    return s
-      .replace(/\s+/g, '')
-      .replace(/正確/g, '')
-      .replace(/[()（）\[\]【】：:，,。.\-_/]/g, '')
-      .replace(/雕/g, '鵰') // 統一雕/鵰
-      .toLowerCase();
-  }
-
-  // 依模型的 className 自動對應到 TARGETS 的 key
-  function buildIndexMap(modelClassNames) {
-    const map = {}; // targetKey -> modelIndex
-    // 先全部標 -1
-    TARGETS.forEach(t => { map[t.key] = -1; });
-
-    modelClassNames.forEach((name, idx) => {
-      const n = normalizeLabel(name);
-      // 關鍵詞比對
-      for (const rule of KEYWORD_MAP) {
-        if (n.indexOf(rule.token) !== -1) {
-          // 如果該招尚未被指派，指派它
-          if (map[rule.target] === -1) {
-            map[rule.target] = idx;
-            break;
-          }
-        }
+      labelContainer = document.getElementById("label-container");
+      labelContainer.innerHTML = "";
+      for (let i = 0; i < maxPredictions; i++) {
+        labelContainer.appendChild(document.createElement("div"));
       }
-      // 如果沒對上，但有 D1~D8 字樣也抓一下
-      if (map.D1 === -1 && /d1/.test(n)) map.D1 = idx;
-      if (map.D2 === -1 && /d2/.test(n)) map.D2 = idx;
-      if (map.D3 === -1 && /d3/.test(n)) map.D3 = idx;
-      if (map.D4 === -1 && /d4/.test(n)) map.D4 = idx;
-      if (map.D5 === -1 && /d5/.test(n)) map.D5 = idx;
-      if (map.D6 === -1 && /d6/.test(n)) map.D6 = idx;
-      if (map.D7 === -1 && /d7/.test(n)) map.D7 = idx;
-      if (map.D8 === -1 && /d8/.test(n)) map.D8 = idx;
-    });
-
-    return map;
-  }
-
-  let indexMap = null; // { D1: 0, D2: 5, ... }
-  let classNames = []; // 模型 className 陣列
-
-  async function init() {
-    const modelURL = "model.json";
-    const metadataURL = "metadata.json";
-
-    model = await tmPose.load(modelURL, metadataURL);
-    maxPredictions = model.getTotalClasses();
-
-    // 取模型 class 名稱
-    classNames = [];
-    try {
-      // 先從 metadata 抓
-      const meta = await fetch(metadataURL, {cache:'no-store'}).then(r=>r.json());
-      const raw = meta.labels || meta.classes || [];
-      classNames = raw.map(x => (x && x.label) ? x.label : (typeof x === 'string' ? x : ''));
-    } catch(e) { /* ignore */ }
-
-    // 若沒拿到，從 model 初推一次取 className
-    if (!classNames.length) {
-      // 先臨時生成空名，等第一次預測再填
-      classNames = new Array(maxPredictions).fill('');
     }
 
-    // 先畫固定八條
-    buildBars();
-
-    const size = 400, flip = true;
-    webcam = new tmPose.Webcam(size, size, flip);
-    await webcam.setup();
-    await webcam.play();
-    const canvas = document.getElementById('canvas');
-    ctx = canvas.getContext('2d');
-    window.requestAnimationFrame(loop);
-  }
-
-  async function loop() {
-    webcam.update();
-    await predict();
-    window.requestAnimationFrame(loop);
-  }
-
-  async function predict() {
-    const videoEl = webcam && webcam.webcam;
-    if (!videoEl || videoEl.readyState < 2) return; // 尚未就緒
-
-    // 用 <video> 當輸入
-    const { pose, posenetOutput } = await model.estimatePose(videoEl);
-    const prediction = await model.predict(posenetOutput);
-
-    // 若 classNames 還空，從第一次 prediction 帶回 className
-    if (!classNames.filter(Boolean).length) {
-      classNames = prediction.map(p => p.className || '');
-    }
-    // 第一次拿到 classNames 後，建立對應表
-    if (!indexMap) {
-      indexMap = buildIndexMap(classNames);
-      console.log('[map] model classes =>', classNames);
-      console.log('[map] indexMap =>', indexMap);
+    async function loop() {
+      webcam.update();
+      await predict();
+      window.requestAnimationFrame(loop);
     }
 
-    // 畫影像與骨架
-    ctx.drawImage(videoEl, 0, 0, ctx.canvas.width, ctx.canvas.height);
-    if (pose) {
-      tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
-      tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
-    }
+    async function predict() {
+      const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+      const prediction = await model.predict(posenetOutput);
 
-    // 依固定順序（TARGETS）更新八條
-    for (const t of TARGETS) {
-      const idx = indexMap ? indexMap[t.key] : -1;
-      const p = (idx >= 0 && prediction[idx]) ? (prediction[idx].probability || 0) : 0;
-      const prob = (p * 100).toFixed(1);
-      const bar = document.getElementById(`bar-${t.key}`);
-      if (bar) { bar.style.width = prob + '%'; bar.textContent = prob + '%'; }
+      ctx.drawImage(webcam.canvas, 0, 0);
+      if (pose) {
+        tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
+        tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
+      }
+
+      for (let i = 0; i < maxPredictions; i++) {
+        const classPrediction =
+          prediction[i].className + ": " +
+          (prediction[i].probability * 100).toFixed(2) + "%";
+        labelContainer.childNodes[i].innerHTML = classPrediction;
+      }
     }
-  }
-</script>
+  </script>
 </body>
 </html>
