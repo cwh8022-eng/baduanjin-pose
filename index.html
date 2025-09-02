@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦辨識（本地模型・shim 修復版）</title>
+  <title>八段錦辨識（shim 修復版）</title>
   <style>
     body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;text-align:center;padding:20px}
     h1{color:#2c3e50;margin:6px 0 12px}
@@ -14,33 +14,53 @@
     #labels div{font-size:16px;margin-top:6px}
   </style>
 
-  <!-- 先載 TFJS（用 3.11 或 1.3 其實都可，因為等下會做 shim） -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js?cb=1"></script>
+  <!-- 1) 固定載 TFJS 3.11.0 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
 
-  <!-- ★ 關鍵：在載入 tmPose 之前，補上 fromPixels shim ★ -->
+  <!-- 2) shim 強化：確保 fromPixels 可用 -->
   <script>
     (function(){
-      if (window.tf) {
-        const hasOld = typeof tf.fromPixels === 'function';
-        const hasNew = tf.browser && typeof tf.browser.fromPixels === 'function';
-        if (!hasOld && hasNew) {
-          // 將新版 API 映射成舊版名稱，給 tmPose 使用
-          tf.fromPixels = function() { return tf.browser.fromPixels.apply(tf.browser, arguments); };
-          console.log('[shim] applied: tf.fromPixels -> tf.browser.fromPixels');
-        } else {
-          console.log('[shim] not needed. hasOld=', hasOld, 'hasNew=', hasNew);
+      if (!window.tf) return console.error('[shim] tf not found');
+
+      var hasOld = typeof tf.fromPixels === 'function';
+      var hasNew = tf.browser && typeof tf.browser.fromPixels === 'function';
+
+      if (!hasOld && hasNew) {
+        var fp = tf.browser.fromPixels.bind(tf.browser);
+        try {
+          Object.defineProperty(tf, 'fromPixels', {
+            value: fp, writable: false, configurable: false, enumerable: false
+          });
+        } catch(e) {
+          tf.fromPixels = fp;
         }
+        console.log('[shim] fromPixels installed & hardened');
       } else {
-        console.warn('[shim] window.tf 不存在？');
+        console.log('[shim] not needed. hasOld=', hasOld, 'hasNew=', hasNew);
       }
+
+      // 監控是否被覆蓋
+      var orig = tf.fromPixels;
+      setInterval(function(){
+        if (typeof tf.fromPixels !== 'function' || tf.fromPixels !== orig) {
+          console.warn('[shim] tf.fromPixels 被覆蓋，正在還原…');
+          try {
+            Object.defineProperty(tf, 'fromPixels', {
+              value: orig, writable: false, configurable: false
+            });
+          } catch(e) {
+            tf.fromPixels = orig;
+          }
+        }
+      }, 500);
     })();
   </script>
 
-  <!-- 再載 Teachable Machine Pose 0.8 -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?cb=1"></script>
+  <!-- 3) 載入 Teachable Machine Pose -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 </head>
 <body>
-  <h1>八段錦辨識（本地模型・shim 修復版）</h1>
+  <h1>八段錦辨識（shim 修復版）</h1>
   <div id="ver">初始化中…</div>
 
   <button id="btnCheck">① 相機自檢</button>
@@ -61,7 +81,7 @@
   verEl.textContent =
     `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | has fromPixels=${typeof tf.fromPixels==='function'}`;
 
-  // 本地模型路徑（與 index.html 同資料夾）
+  // 本地模型路徑
   const modelURL    = './model.json';
   const metadataURL = './metadata.json';
 
@@ -73,7 +93,7 @@
     msgEl.textContent = '';
     try{
       if(!window.isSecureContext){
-        throw new Error('此頁面不是 HTTPS 或 localhost，瀏覽器會封鎖相機（SecurityError）');
+        throw new Error('此頁面不是 HTTPS 或 localhost，瀏覽器會封鎖相機');
       }
       const stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
       stream.getTracks().forEach(t=>t.stop());
@@ -90,26 +110,18 @@
   // ② 載入模型並開始
   btnStart.onclick = async () => {
     msgEl.style.color = '#c0392b';
-    msgEl.textContent = '載入檢查中…';
+    msgEl.textContent = '載入中…';
     try{
-      // fromPixels 檢查（已做 shim，這裡應該是 function）
       if (typeof tf.fromPixels !== 'function') {
-        throw new Error('tf.fromPixels 仍不可用（shim 失敗或有外掛覆蓋 tf）。請用「訪客模式」重試。');
+        throw new Error('tf.fromPixels 仍不可用（請用訪客模式測試，避免外掛覆蓋 TFJS）');
       }
 
-      // backend
       try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
       await tf.ready();
 
-      // 確認本地檔存在
-      await mustOk(modelURL, 'model.json');
-      await mustOk(metadataURL, 'metadata.json');
-
-      // 載入模型
       model = await tmPose.load(modelURL, metadataURL);
       maxPred = model.getTotalClasses();
 
-      // 啟用 Webcam
       const size = 400, flip = true;
       webcam = new tmPose.Webcam(size, size, flip);
       await webcam.setup();
@@ -119,7 +131,6 @@
       canvas.style.display = 'block';
       ctx = canvas.getContext('2d');
 
-      // 標籤
       labels = document.getElementById('labels');
       labels.innerHTML = '';
       for(let i=0;i<maxPred;i++) labels.appendChild(document.createElement('div'));
@@ -130,13 +141,7 @@
 
     }catch(e){
       msgEl.style.color = '#c0392b';
-      msgEl.textContent =
-        '❌ 無法載入模型：\n' + (e.message || e.toString()) +
-        '\n\n請確認以下事項：\n' +
-        '• model.json / metadata.json / weights.bin 三檔與 index.html 在同一資料夾。\n' +
-        '• 檔名大小寫完全一致（GitHub Pages 大小寫有別）。\n' +
-        '• 不是用 file:// 打開，請用 HTTPS 網址或 http://localhost。\n' +
-        '• 若仍失敗，請使用 Chrome「訪客模式」以排除外掛覆蓋 TFJS。';
+      msgEl.textContent = '❌ 無法載入模型：\n' + (e.message||e.toString());
       console.error(e);
     }
   };
@@ -160,12 +165,6 @@
       labels.childNodes[i].textContent =
         `${prediction[i].className}: ${(prediction[i].probability*100).toFixed(2)}%`;
     }
-  }
-
-  async function mustOk(url, name){
-    const r = await fetch(url, { cache:'no-store' });
-    if(!r.ok) throw new Error(`${name} HTTP ${r.status}（找不到或被阻擋）`);
-    return r;
   }
 })();
 </script>
