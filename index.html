@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦辨識（tfjs 1.7.4 相容版 + 分類條）</title>
+  <title>八段錦辨識（分類條・強化防覆寫版）</title>
   <style>
     :root{color-scheme:light dark}
     body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;margin:0;padding:20px;text-align:center}
@@ -25,13 +25,65 @@
     @media (max-width:900px){.wrap{grid-template-columns:1fr}}
   </style>
 
-  <!-- ★ 固定使用 tfjs 1.7.4（含 tf.fromPixels）-->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js?cb=174"></script>
-  <!-- ★ 再載 tmPose 0.8（必須在 tfjs 之後） -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?cb=08"></script>
+  <!-- 1) 先載 tfjs 1.7.4（含 fromPixels） -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
+
+  <!-- 2) 監控/攔截任何對 window.tf 的覆寫，並自動修補 fromPixels -->
+  <script>
+    (function guardTF(){
+      // 工具：把 fromPixels 修好（支援新舊 API）
+      function ensureFromPixels(tf) {
+        if (!tf) return;
+        var hasOld = typeof tf.fromPixels === 'function';
+        var hasNew = tf.browser && typeof tf.browser.fromPixels === 'function';
+        if (!hasOld && hasNew) {
+          try {
+            Object.defineProperty(tf, 'fromPixels', {
+              value: tf.browser.fromPixels.bind(tf.browser),
+              writable: false, configurable: false
+            });
+          } catch (_) { tf.fromPixels = tf.browser.fromPixels.bind(tf.browser); }
+          console.log('[guard] patched tf.fromPixels from tf.browser.fromPixels');
+        }
+        return typeof tf.fromPixels === 'function';
+      }
+
+      // 1) 先對目前的 tf 做一次修補
+      ensureFromPixels(window.tf);
+
+      // 2) 攔截「之後」任何對 window.tf 的覆寫
+      var _tf = window.tf;
+      try {
+        Object.defineProperty(window, 'tf', {
+          configurable: true,
+          get() { return _tf; },
+          set(v) {
+            _tf = v;
+            var ok = ensureFromPixels(_tf);
+            console.warn('[guard] window.tf was replaced, fromPixels ok =', ok);
+          }
+        });
+        console.log('[guard] window.tf setter installed');
+      } catch (e) {
+        console.warn('[guard] cannot install setter, fallback to watcher', e);
+        // 3) 若環境不允許 setter，就用輪詢監控
+        var last = window.tf;
+        setInterval(function(){
+          if (window.tf !== last) {
+            last = window.tf;
+            var ok = ensureFromPixels(last);
+            console.warn('[guard] window.tf changed, fromPixels ok =', ok);
+          }
+        }, 400);
+      }
+    })();
+  </script>
+
+  <!-- 3) 再載 Teachable Machine Pose（必須在 guard 之後） -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 </head>
 <body>
-  <h1>八段錦動作辨識（tfjs 1.7.4 相容版）</h1>
+  <h1>八段錦動作辨識（分類條）</h1>
   <div id="ver">初始化中…</div>
 
   <button id="btnCheck" class="btn">① 相機自檢</button>
@@ -56,16 +108,10 @@
   const btnCheck = document.getElementById('btnCheck');
   const btnStart = document.getElementById('btnStart');
 
-  // 版本自檢（避免被其它腳本覆蓋）
   const tfv = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : '未載';
   const hasFP = (typeof (window.tf && tf.fromPixels) === 'function');
   verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${tfv} | has fromPixels=${hasFP}`;
 
-  if (!hasFP) {
-    console.error('[check] tf.fromPixels 不存在——代表 tfjs 不是 1.x 或被其他外掛覆蓋。請用 Chrome 訪客模式再試。');
-  }
-
-  // 與 index.html 同層的模型檔
   const modelURL    = './model.json';
   const metadataURL = './metadata.json';
 
@@ -74,7 +120,6 @@
   let barsBuilt = false;
   let smooth = {};
 
-  // 相機自檢
   btnCheck.onclick = async () => {
     msgEl.style.color = '#c0392b'; msgEl.textContent = '';
     try{
@@ -91,18 +136,16 @@
     }
   };
 
-  // 載入模型並開始
   btnStart.onclick = async () => {
     msgEl.style.color = '#c0392b'; msgEl.textContent = '載入中…';
     try{
       if (typeof tf.fromPixels !== 'function') {
-        throw new Error('tf.fromPixels 不可用：目前頁面上的 TFJS 並非 1.x，或被外掛覆蓋。請以 Chrome「訪客模式」開啟此頁。');
+        throw new Error('tf.fromPixels 不可用：當前頁面的 TFJS 被外掛或其它腳本覆蓋。若仍無法運行，請用 Chrome「訪客模式」開啟此頁。');
       }
 
       try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
       await tf.ready();
 
-      // 先確認模型檔存在，避免 404
       await mustOk(modelURL, 'model.json');
       await mustOk(metadataURL, 'metadata.json');
 
@@ -113,11 +156,10 @@
       const canvas = document.getElementById('canvas');
       ctx = canvas.getContext('2d');
 
-      // 建立相機
-      const tmCam = new tmPose.Webcam(size, size, flip);
-      await tmCam.setup();
-      await tmCam.play();
-      window.webcam = tmCam;      // 方便除錯
+      const cam = new tmPose.Webcam(size, size, flip);
+      await cam.setup();
+      await cam.play();
+      window.webcam = cam;
 
       msgEl.style.color = '#27ae60';
       msgEl.textContent = '✅ 模型載入完成，相機啟動成功！';
