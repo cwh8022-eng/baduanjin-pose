@@ -5,76 +5,57 @@
   <title>八段錦動作辨識系統</title>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
   <style>
-    body {
-      font-family: 'Noto Sans TC', sans-serif;
-      text-align: center;
-      background-color: #f0f4f8;
-      padding: 40px;
-    }
-    h1 {
-      color: #2c3e50;
-    }
-    p {
-      font-size: 18px;
-      color: #555;
-    }
-    canvas {
-      margin-top: 20px;
-      border: 2px solid #2c3e50;
-    }
-    #label-container div {
-      margin-top: 10px;
-      font-size: 20px;
-      color: #16a085;
-    }
-    button {
-      padding: 10px 20px;
-      font-size: 18px;
-      background-color: #27ae60;
-      color: white;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      margin-top: 20px;
-    }
-    button:hover {
-      background-color: #219150;
-    }
+    body { font-family: 'Noto Sans TC', sans-serif; text-align: center; background-color: #f0f4f8; padding: 40px; }
+    h1 { color: #2c3e50; }
+    p { font-size: 18px; color: #555; }
+    canvas { margin-top: 20px; border: 2px solid #2c3e50; }
+    #label-container div { margin-top: 10px; font-size: 20px; color: #16a085; }
+    button { padding: 10px 20px; font-size: 18px; background-color: #27ae60; color: white; border: none; border-radius: 8px; cursor: pointer; margin-top: 20px; }
+    button:hover { background-color: #219150; }
+    #error-message { color: red; font-weight: bold; margin-top: 20px; }
   </style>
 </head>
 <body>
   <h1>八段錦動作辨識系統</h1>
   <p>請開啟攝影機並執行八段錦動作，本系統將即時辨識姿勢正確與否。</p>
-  <button type="button" onclick="init()">開始辨識</button>
+  <button onclick="init()">開始辨識</button>
   <div id="webcam-container"></div>
   <div id="label-container"></div>
+  <div id="error-message"></div>
 
   <script type="text/javascript">
-    let model, webcam, ctx, labelContainer, maxPredictions;
+    let model, webcam, labelContainer, maxPredictions;
 
     async function init() {
-      const URL = "./";  // 模型路徑
+      const URL = "./";
       const modelURL = URL + "model.json";
       const metadataURL = URL + "metadata.json";
 
-      model = await tmPose.load(modelURL, metadataURL);
-      maxPredictions = model.getTotalClasses();
+      try {
+        model = await tmPose.load(modelURL, metadataURL);
+        maxPredictions = model.getTotalClasses();
 
-      const size = 400;
-      const flip = true;
-      webcam = new tmPose.Webcam(size, size, flip);
-      await webcam.setup();
-      await webcam.play();
-      window.requestAnimationFrame(loop);
+        const size = 400;
+        const flip = true;
+        webcam = new tmPose.Webcam(size, size, flip);
 
-      document.getElementById("webcam-container").appendChild(webcam.canvas);
-      labelContainer = document.getElementById("label-container");
-      for (let i = 0; i < maxPredictions; i++) {
-        labelContainer.appendChild(document.createElement("div"));
+        await webcam.setup(); // 要求相機權限
+        await webcam.play();
+        window.requestAnimationFrame(loop);
+
+        document.getElementById("webcam-container").appendChild(webcam.canvas);
+        labelContainer = document.getElementById("label-container");
+        for (let i = 0; i < maxPredictions; i++) {
+          labelContainer.appendChild(document.createElement("div"));
+        }
+      } catch (error) {
+        console.error("Camera error:", error);
+        document.getElementById("error-message").innerText = 
+          "⚠️ 錯誤：無法開啟攝影機。請確認權限、瀏覽器支援與 HTTPS 設定。";
       }
     }
 
-    async function loop(timestamp) {
+    async function loop() {
       webcam.update();
       await predict();
       window.requestAnimationFrame(loop);
