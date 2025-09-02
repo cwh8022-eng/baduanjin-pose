@@ -1,78 +1,79 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
-  <title>Baduanjin Pose Detection</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Teachable Machine - 八段錦動作辨識</title>
+
+  <!-- ✅ 正確的 tfjs v3.9.0 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js"></script>
+  <!-- ✅ TeachableMachine Pose v0.8 -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+
   <style>
     body {
-      font-family: Arial, sans-serif;
-      background: #f0f4f8;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
+      font-family: 'Arial', sans-serif;
+      background-color: #f0f0f0;
+      text-align: center;
       padding: 20px;
     }
-    h1 {
-      color: #2c3e50;
-    }
-    canvas {
-      border: 2px solid #2c3e50;
-      margin-top: 20px;
-    }
-    #label-container div {
-      font-size: 18px;
+    video, canvas {
+      border: 2px solid #333;
       margin-top: 10px;
-      color: #34495e;
+    }
+    #label-container {
+      margin-top: 20px;
+      font-size: 1.2em;
+      color: #222;
     }
     button {
       padding: 10px 20px;
+      margin-top: 20px;
       font-size: 16px;
-      background-color: #2980b9;
+      background-color: #3498db;
       color: white;
       border: none;
-      cursor: pointer;
       border-radius: 5px;
-      margin-top: 15px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #2980b9;
     }
   </style>
 </head>
 <body>
-  <h1>Baduanjin Pose Detection</h1>
-  <button type="button" onclick="init()">Start</button>
-  <div id="label-container"></div>
+  <h1>八段錦動作辨識系統</h1>
+  <p>tfjs 版本：<span id="tfjs-version"></span></p>
+  <button onclick="init()">啟動模型與鏡頭</button>
   <div><canvas id="canvas"></canvas></div>
-
-  <!-- ✅ TensorFlow.js v3.11.0 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
-  <!-- ✅ Teachable Machine Pose v0.8 -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <div id="label-container"></div>
 
   <script type="text/javascript">
-    console.log("✅ TensorFlow.js version:", tf.version.tfjs);
+    document.getElementById('tfjs-version').innerText = tf.version.tfjs;
 
-    const URL = "./model/"; // 替換為你的模型資料夾路徑
+    const URL = "https://teachablemachine.withgoogle.com/models/YOUR_MODEL_URL/"; // ←請換成你自己的 model 連結
     let model, webcam, ctx, labelContainer, maxPredictions;
 
     async function init() {
       const modelURL = URL + "model.json";
       const metadataURL = URL + "metadata.json";
 
+      // 載入模型
       model = await tmPose.load(modelURL, metadataURL);
       maxPredictions = model.getTotalClasses();
 
+      // 設定攝影機
       const size = 400;
-      const flip = true;
-
+      const flip = true; // 是否鏡像畫面
       webcam = new tmPose.Webcam(size, size, flip);
-      await webcam.setup();
+      await webcam.setup(); // 啟用攝影機
       await webcam.play();
       window.requestAnimationFrame(loop);
 
-      const canvas = document.getElementById("canvas");
-      canvas.width = size;
-      canvas.height = size;
-      ctx = canvas.getContext("2d");
+      // 顯示畫面
+      document.getElementById("canvas").width = size;
+      document.getElementById("canvas").height = size;
+      ctx = document.getElementById("canvas").getContext("2d");
 
       labelContainer = document.getElementById("label-container");
       labelContainer.innerHTML = "";
@@ -91,11 +92,9 @@
       const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
       const prediction = await model.predict(posenetOutput);
 
-      // 畫出姿勢關節
+      // 畫出姿勢點
       ctx.drawImage(webcam.canvas, 0, 0);
-      if (pose) {
-        tmPose.drawPose(pose, ctx);
-      }
+      tmPose.drawPose(pose, ctx);
 
       for (let i = 0; i < maxPredictions; i++) {
         const classPrediction =
