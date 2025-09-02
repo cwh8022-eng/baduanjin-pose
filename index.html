@@ -1,10 +1,15 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Baduanjin Pose Detection</title>
+
+  <!-- 必須先引入 TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.20.0/dist/tf.min.js"></script>
+
+  <!-- 再載入 Teachable Machine 的 Pose 模型 -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+
   <style>
     body {
       font-family: 'Arial', sans-serif;
@@ -54,9 +59,11 @@
       const modelURL = URL + "model.json";
       const metadataURL = URL + "metadata.json";
 
+      // 載入模型
       model = await tmPose.load(modelURL, metadataURL);
       maxPredictions = model.getTotalClasses();
 
+      // 初始化 webcam
       const size = 400;
       const flip = true;
       webcam = new tmPose.Webcam(size, size, flip);
@@ -64,11 +71,13 @@
       await webcam.play();
       window.requestAnimationFrame(loop);
 
+      // 設定畫布
       const canvas = document.getElementById("canvas");
       canvas.width = size;
       canvas.height = size;
       ctx = canvas.getContext("2d");
 
+      // 清空舊資料並準備 label 容器
       labelContainer = document.getElementById("label-container");
       labelContainer.innerHTML = "";
       for (let i = 0; i < maxPredictions; i++) {
