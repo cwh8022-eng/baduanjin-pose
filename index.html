@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦辨識（含分類條・shim 修復版）</title>
+  <title>八段錦辨識（tfjs 1.7.4 相容版 + 分類條）</title>
   <style>
     :root{color-scheme:light dark}
     body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;margin:0;padding:20px;text-align:center}
@@ -25,43 +25,13 @@
     @media (max-width:900px){.wrap{grid-template-columns:1fr}}
   </style>
 
-  <!-- TFJS -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
-
-  <!-- shim：確保 tmPose 可用 tf.fromPixels -->
-  <script>
-    (function(){
-      if (!window.tf) return console.error('[shim] tf not found');
-      var hasOld = typeof tf.fromPixels === 'function';
-      var hasNew = tf.browser && typeof tf.browser.fromPixels === 'function';
-      if (!hasOld && hasNew) {
-        var fp = tf.browser.fromPixels.bind(tf.browser);
-        try {
-          Object.defineProperty(tf, 'fromPixels', { value: fp, writable:false, configurable:false });
-        } catch(e) {
-          tf.fromPixels = fp;
-        }
-        console.log('[shim] fromPixels installed & hardened');
-      } else {
-        console.log('[shim] not needed. hasOld=', hasOld, 'hasNew=', hasNew);
-      }
-      // 監控是否被覆寫並自動還原
-      var orig = tf.fromPixels;
-      setInterval(function(){
-        if (typeof tf.fromPixels !== 'function' || tf.fromPixels !== orig) {
-          console.warn('[shim] tf.fromPixels 被覆蓋，正在還原…');
-          try { Object.defineProperty(tf,'fromPixels',{value:orig,writable:false,configurable:false}); }
-          catch(e){ tf.fromPixels = orig; }
-        }
-      }, 500);
-    })();
-  </script>
-
-  <!-- Teachable Machine Pose -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <!-- ★ 固定使用 tfjs 1.7.4（含 tf.fromPixels）-->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js?cb=174"></script>
+  <!-- ★ 再載 tmPose 0.8（必須在 tfjs 之後） -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?cb=08"></script>
 </head>
 <body>
-  <h1>八段錦動作辨識（含分類條）</h1>
+  <h1>八段錦動作辨識（tfjs 1.7.4 相容版）</h1>
   <div id="ver">初始化中…</div>
 
   <button id="btnCheck" class="btn">① 相機自檢</button>
@@ -86,8 +56,14 @@
   const btnCheck = document.getElementById('btnCheck');
   const btnStart = document.getElementById('btnStart');
 
-  verEl.textContent =
-    `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | has fromPixels=${typeof tf.fromPixels==='function'}`;
+  // 版本自檢（避免被其它腳本覆蓋）
+  const tfv = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : '未載';
+  const hasFP = (typeof (window.tf && tf.fromPixels) === 'function');
+  verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${tfv} | has fromPixels=${hasFP}`;
+
+  if (!hasFP) {
+    console.error('[check] tf.fromPixels 不存在——代表 tfjs 不是 1.x 或被其他外掛覆蓋。請用 Chrome 訪客模式再試。');
+  }
 
   // 與 index.html 同層的模型檔
   const modelURL    = './model.json';
@@ -120,10 +96,15 @@
     msgEl.style.color = '#c0392b'; msgEl.textContent = '載入中…';
     try{
       if (typeof tf.fromPixels !== 'function') {
-        throw new Error('tf.fromPixels 不可用（請用訪客模式測試，避免外掛覆蓋 TFJS）');
+        throw new Error('tf.fromPixels 不可用：目前頁面上的 TFJS 並非 1.x，或被外掛覆蓋。請以 Chrome「訪客模式」開啟此頁。');
       }
+
       try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
       await tf.ready();
+
+      // 先確認模型檔存在，避免 404
+      await mustOk(modelURL, 'model.json');
+      await mustOk(metadataURL, 'metadata.json');
 
       model = await tmPose.load(modelURL, metadataURL);
       maxPred = model.getTotalClasses();
@@ -132,12 +113,11 @@
       const canvas = document.getElementById('canvas');
       ctx = canvas.getContext('2d');
 
-      // ★ 修正點：建立後指回全域 webcam 變數
+      // 建立相機
       const tmCam = new tmPose.Webcam(size, size, flip);
       await tmCam.setup();
       await tmCam.play();
-      webcam = tmCam;           // <= 這行是關鍵
-      window.webcam = webcam;   // 方便除錯觀看
+      window.webcam = tmCam;      // 方便除錯
 
       msgEl.style.color = '#27ae60';
       msgEl.textContent = '✅ 模型載入完成，相機啟動成功！';
@@ -170,15 +150,14 @@
   function cssId(name){ return name.replace(/\s+/g,'-').replace(/[^-\w]/g,''); }
 
   async function loop(){
-    // 防呆：webcam 尚未準備就先跳出
-    if (!webcam) { requestAnimationFrame(loop); return; }
-    webcam.update();
+    if (!window.webcam) { requestAnimationFrame(loop); return; }
+    window.webcam.update();
     await predict();
     requestAnimationFrame(loop);
   }
 
   async function predict(){
-    const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+    const { pose, posenetOutput } = await model.estimatePose(window.webcam.canvas);
     const preds = await model.predict(posenetOutput);
 
     if (!barsBuilt) {
@@ -186,7 +165,7 @@
       buildBars(classNames);
     }
 
-    ctx.drawImage(webcam.canvas, 0, 0);
+    ctx.drawImage(window.webcam.canvas, 0, 0);
     if (pose) {
       tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
       tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
@@ -211,6 +190,12 @@
 
     const topEl = document.getElementById('topClass');
     topEl.textContent = `目前辨識：${top.className}（${(top.probability*100).toFixed(2)}%）`;
+  }
+
+  async function mustOk(url, name){
+    const r = await fetch(url, { cache:'no-store' });
+    if(!r.ok) throw new Error(`${name} HTTP ${r.status}（找不到或被阻擋）`);
+    return r;
   }
 })();
 </script>
