@@ -3,109 +3,201 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識</title>
+  <title>八段錦動作辨識（固定八式 + 進度條）</title>
 
-  <!-- ✅ 固定相容版本 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
+  <!-- 與 tmPose 相容且內建 tf.fromPixels -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f0f4f8;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 20px;
-    }
-    h1 { color: #2c3e50; }
-    canvas {
-      border: 2px solid #2c3e50;
-      margin-top: 20px;
-    }
-    #label-container div {
-      font-size: 18px;
-      margin-top: 5px;
-      color: #34495e;
-    }
-    button {
-      margin-top: 20px;
-      padding: 10px 20px;
-      font-size: 16px;
-      background-color: #2980b9;
-      color: white;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
-    }
+    :root { --w: 880px; }
+    body { font-family: Arial, "Noto Sans TC", system-ui; background:#f3f5f8; padding:22px 14px 40px; color:#1f2937; }
+    h1 { text-align:center; margin:0 0 10px; font-weight:700; }
+    .hint { text-align:center; color:#6b7280; margin-bottom:10px; }
+    .wrap { width:min(var(--w), 96vw); margin:0 auto; }
+    .stage { display:flex; gap:18px; align-items:flex-start; flex-wrap:wrap; }
+    canvas { width:min(420px, 96vw); height:auto; border-radius:12px; border:2px solid #334155; background:#000; }
+    .panel { flex:1 1 420px; min-width:320px; }
+
+    /* 清單：左固定名稱 + 右進度條 + 小字模型名 */
+    .row { display:grid; grid-template-columns: 180px 1fr; gap:12px; align-items:center; margin:10px 0; }
+    .name { font-weight:700; color:#374151; }
+    .track { position:relative; background:#e5e7eb; border-radius:999px; overflow:hidden; height:22px; box-shadow: inset 0 1px 1px rgba(0,0,0,.06);}
+    .bar { height:100%; width:0%; background:linear-gradient(90deg,#34d399,#10b981); color:#fff; line-height:22px; text-align:right; padding-right:8px; font-size:12px; font-weight:600; transition:width .18s ease; }
+    .cls { position:absolute; right:8px; top:-18px; font-size:11px; color:#6b7280; }
+    button { display:block; margin:0 auto 14px; padding:10px 16px; border:0; border-radius:10px; background:#0ea5e9; color:#fff; cursor:pointer; font-size:16px; box-shadow:0 4px 14px rgba(14,165,233,.25); }
+    button:hover { filter:brightness(1.05); }
   </style>
 </head>
 <body>
   <h1>八段錦動作辨識</h1>
-  <button onclick="init()">啟動辨識</button>
-  <div><canvas id="canvas"></canvas></div>
-  <div id="label-container"></div>
+  <div class="hint">請以 HTTPS 或 localhost 開啟，並允許攝影機</div>
+  <div class="wrap">
+    <button onclick="init()">啟動辨識</button>
 
-  <script>
-    let model, webcam, ctx, labelContainer, maxPredictions;
+    <div class="stage">
+      <canvas id="canvas" width="400" height="400"></canvas>
+      <div class="panel" id="list"></div>
+    </div>
+  </div>
 
-    async function init() {
-      // 🔧 自動偵測目前頁面的資料夾，確保載入正確路徑
-      const BASE =
-        location.origin +
-        (location.pathname.endsWith('/')
-          ? location.pathname
-          : location.pathname.replace(/[^/]+$/, '/'));
+<script>
+  let model, webcam, ctx, maxPredictions;
+  let indexMap = null;      // { D1: 0, D2: 3, ... }（target -> model index）
+  let classNames = [];      // 模型回傳的 className
 
-      const modelURL    = BASE + "model.json";
-      const metadataURL = BASE + "metadata.json";
-      console.log("[model paths]", { modelURL, metadataURL });
+  // 固定顯示的八式（順序）
+  const TARGETS = [
+    { key: 'D1', name: '雙手托天理三焦' },
+    { key: 'D2', name: '左右開弓似射鵰' },
+    { key: 'D3', name: '調理脾胃須單舉' },
+    { key: 'D4', name: '五勞七傷往後瞧' },
+    { key: 'D5', name: '搖頭擺尾去心火' },
+    { key: 'D6', name: '兩手攀足固腎腰' },
+    { key: 'D7', name: '攢拳怒目增氣力' },
+    { key: 'D8', name: '背後七顛百病消' }
+  ];
 
-      model = await tmPose.load(modelURL, metadataURL);
-      maxPredictions = model.getTotalClasses();
+  // 關鍵詞 -> 對應哪一招（盡量包常見寫法）
+  const KEYWORD_MAP = [
+    { token:'雙手托天', target:'D1' }, { token:'托天', target:'D1' },
+    { token:'開弓', target:'D2' }, { token:'射雕', target:'D2' }, { token:'射鵰', target:'D2' },
+    { token:'單舉', target:'D3' }, { token:'脾胃', target:'D3' },
+    { token:'往後瞧', target:'D4' }, { token:'七傷', target:'D4' },
+    { token:'擺尾', target:'D5' }, { token:'去心火', target:'D5' },
+    { token:'攀足', target:'D6' }, { token:'腎腰', target:'D6' },
+    { token:'攢拳', target:'D7' }, { token:'增氣力', target:'D7' },
+    { token:'七顛', target:'D8' }, { token:'百病消', target:'D8' }
+  ];
 
-      const size = 400;
-      const flip = true;
-      webcam = new tmPose.Webcam(size, size, flip);
-      await webcam.setup();
-      await webcam.play();
-      window.requestAnimationFrame(loop);
+  function normalizeLabel(s){
+    if(!s) return '';
+    return s
+      .replace(/\s+/g,'')
+      .replace(/正確/g,'')
+      .replace(/[()（）\[\]【】：:，,。.\-_/]/g,'')
+      .replace(/雕/g,'鵰')
+      .toLowerCase();
+  }
 
-      const canvas = document.getElementById("canvas");
-      canvas.width = size;
-      canvas.height = size;
-      ctx = canvas.getContext("2d");
-
-      labelContainer = document.getElementById("label-container");
-      labelContainer.innerHTML = "";
-      for (let i = 0; i < maxPredictions; i++) {
-        labelContainer.appendChild(document.createElement("div"));
+  function buildIndexMap(modelClassNames){
+    const map = {}; TARGETS.forEach(t=>map[t.key]=-1);
+    modelClassNames.forEach((name, idx)=>{
+      const n = normalizeLabel(name);
+      for(const rule of KEYWORD_MAP){
+        if(n.indexOf(rule.token)!==-1 && map[rule.target]===-1){
+          map[rule.target]=idx; break;
+        }
       }
+      if(map.D1===-1 && /d1/.test(n)) map.D1=idx;
+      if(map.D2===-1 && /d2/.test(n)) map.D2=idx;
+      if(map.D3===-1 && /d3/.test(n)) map.D3=idx;
+      if(map.D4===-1 && /d4/.test(n)) map.D4=idx;
+      if(map.D5===-1 && /d5/.test(n)) map.D5=idx;
+      if(map.D6===-1 && /d6/.test(n)) map.D6=idx;
+      if(map.D7===-1 && /d7/.test(n)) map.D7=idx;
+      if(map.D8===-1 && /d8/.test(n)) map.D8=idx;
+    });
+    return map;
+  }
+
+  function buildUI(labels){
+    const list = document.getElementById('list');
+    list.innerHTML = '';
+    TARGETS.forEach((t, i)=>{
+      const row=document.createElement('div'); row.className='row';
+      const name=document.createElement('div'); name.className='name'; name.textContent = `${i+1}. ${t.name}`;
+      const track=document.createElement('div'); track.className='track';
+      const bar=document.createElement('div'); bar.className='bar'; bar.id=`bar-${t.key}`; bar.textContent='0.0%';
+      const cls=document.createElement('div'); cls.className='cls'; cls.id=`cls-${t.key}`; cls.textContent='';
+      track.appendChild(bar); track.appendChild(cls);
+      row.appendChild(name); row.appendChild(track);
+      list.appendChild(row);
+    });
+
+    // 初次把對應到的模型類別名顯示在每條右上角
+    if(indexMap){
+      TARGETS.forEach(t=>{
+        const idx=indexMap[t.key];
+        const label = (idx>=0 && labels[idx]) ? labels[idx] : '（未對應）';
+        const el = document.getElementById(`cls-${t.key}`);
+        if(el) el.textContent = label;
+      });
+    }
+  }
+
+  async function init(){
+    // 依目前路徑自動載入模型檔
+    const BASE = location.origin + (location.pathname.endsWith('/') ? location.pathname : location.pathname.replace(/[^/]+$/,'/'));
+    const modelURL = BASE + 'model.json';
+    const metadataURL = BASE + 'metadata.json';
+    console.log('[model paths]', {modelURL, metadataURL});
+
+    model = await tmPose.load(modelURL, metadataURL);
+    maxPredictions = model.getTotalClasses();
+
+    // 先嘗試從 metadata 取得 labels
+    let labels=[];
+    try{
+      const meta = await fetch(metadataURL, {cache:'no-store'}).then(r=>r.json());
+      const raw = meta.labels || meta.classes || [];
+      labels = raw.map(x => (x && x.label) ? x.label : (typeof x==='string' ? x : ''));
+    }catch(e){}
+    if(!labels.length) labels = new Array(maxPredictions).fill('');
+
+    // 先建立映射與 UI
+    indexMap = buildIndexMap(labels);
+    classNames = labels.slice();
+    buildUI(classNames);
+
+    // 設置 webcam
+    const size=400, flip=true;
+    webcam = new tmPose.Webcam(size, size, flip);
+    await webcam.setup();
+    await webcam.play();
+
+    const canvas=document.getElementById('canvas');
+    ctx=canvas.getContext('2d');
+
+    window.requestAnimationFrame(loop);
+  }
+
+  async function loop(){
+    webcam.update();
+    await predict();
+    window.requestAnimationFrame(loop);
+  }
+
+  async function predict(){
+    const videoEl = webcam && webcam.webcam;
+    if(!videoEl || videoEl.readyState < 2) return;
+
+    const { pose, posenetOutput } = await model.estimatePose(videoEl);
+    const prediction = await model.predict(posenetOutput);
+
+    // 如果 classNames 還是空的，從第一次 prediction 補齊，重建映射與標籤
+    if(!classNames.filter(Boolean).length){
+      classNames = prediction.map(p => p.className || '');
+      indexMap = buildIndexMap(classNames);
+      buildUI(classNames);
     }
 
-    async function loop() {
-      webcam.update();
-      await predict();
-      window.requestAnimationFrame(loop);
+    // 畫畫面與骨架
+    ctx.drawImage(videoEl, 0, 0, ctx.canvas.width, ctx.canvas.height);
+    if(pose){
+      tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
+      tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
     }
 
-    async function predict() {
-      const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
-      const prediction = await model.predict(posenetOutput);
-
-      ctx.drawImage(webcam.canvas, 0, 0);
-      if (pose) {
-        tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
-        tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
-      }
-
-      for (let i = 0; i < maxPredictions; i++) {
-        const classPrediction =
-          prediction[i].className + ": " +
-          (prediction[i].probability * 100).toFixed(2) + "%";
-        labelContainer.childNodes[i].innerHTML = classPrediction;
-      }
+    // 依固定八式順序更新進度條
+    for(const t of TARGETS){
+      const idx = indexMap ? indexMap[t.key] : -1;
+      const p = (idx>=0 && prediction[idx]) ? (prediction[idx].probability || 0) : 0;
+      const pct = (p*100).toFixed(1) + '%';
+      const bar = document.getElementById(`bar-${t.key}`);
+      if(bar){ bar.style.width = pct; bar.textContent = pct; }
     }
-  </script>
+  }
+</script>
 </body>
 </html>
