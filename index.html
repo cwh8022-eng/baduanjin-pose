@@ -2,139 +2,89 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦極簡辨識（相容修正版）</title>
+  <title>八段錦診斷版</title>
 
-  <!-- 1) 先載入：固定相容版本的 tfjs 3.9.0（加上 cache bust 參數） -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js?v=tf390" crossorigin="anonymous"></script>
-
-  <!-- 2) 相容性 shim：若 tf.browser.fromPixels 不存在，嘗試用舊別名 tf.fromPixels 補上 -->
+  <!-- 鎖定相容版本 + 加 bust 參數避免快取 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js?v=tf390"></script>
   <script>
-    (function () {
-      try {
-        // 印出版本，方便你在 Console 確認
-        console.log("tfjs version:", tf && tf.version ? tf.version.tfjs : "N/A");
-
-        // 某些情況（快取/衝突）會讓 tf.browser.fromPixels 不存在；這裡補一個別名
-        if (!tf.browser) tf.browser = {};
-        if (typeof tf.browser.fromPixels !== "function" && typeof tf.fromPixels === "function") {
-          tf.browser.fromPixels = tf.fromPixels; // 別名轉接
-          console.log("Applied shim: tf.browser.fromPixels = tf.fromPixels");
-        }
-      } catch (e) {
-        console.warn("tfjs 尚未正確載入：", e);
-      }
-    })();
+    // 顯示所有 script，看看是否有第二個 tfjs
+    window.addEventListener('DOMContentLoaded', () => {
+      const list = Array.from(document.scripts).map(s => s.src).filter(Boolean);
+      console.log('Loaded scripts:', list);
+      document.getElementById('scripts').textContent = list.join('\n');
+    });
+    // 檢查 tfjs 版本 & fromPixels
+    window.addEventListener('load', () => {
+      const ver = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : '未載入';
+      const ok = !!(tf && tf.browser && typeof tf.browser.fromPixels === 'function');
+      document.getElementById('ver').textContent = `tfjs 版本：${ver}；fromPixels：${ok ? 'OK' : '缺失'}`;
+    });
   </script>
 
-  <!-- 3) 再載入：teachablemachine pose 0.8（瀏覽器 UMD 版，亦加 cache bust） -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
 
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; background: #f5f7fa; padding: 20px; }
-    h1 { margin: 0 0 8px; color: #2c3e50; }
-    #ver { color:#7f8c8d; font-size:14px; margin: 6px 0 12px; }
-    #err { color:#c0392b; font-weight:700; margin: 6px 0 12px; }
-    canvas { border: 2px solid #2c3e50; margin-top: 10px; }
-    #label-container div { font-size: 18px; margin-top: 8px; }
-    button { margin-top: 12px; padding: 10px 20px; font-size: 16px; background:#2980b9; color:#fff; border:none; border-radius:6px; cursor:pointer; }
-    button:hover { background:#2573a3; }
+    body { font-family: Arial, sans-serif; background:#f5f7fa; padding:16px; text-align:center; }
+    #ver { color:#2c3e50; margin:8px 0; font-weight:600; }
+    #err { color:#c0392b; margin:8px 0; font-weight:700; }
+    pre { text-align:left; background:#fff; padding:10px; border:1px solid #ddd; max-width:900px; margin:12px auto; overflow:auto; }
+    canvas { border:2px solid #2c3e50; margin-top:14px; }
+    button { margin-top:12px; padding:10px 18px; background:#2980b9; color:#fff; border:none; border-radius:6px; cursor:pointer; }
   </style>
 </head>
 <body>
-  <h1>八段錦極簡辨識</h1>
-  <div id="ver">檢查版本中…</div>
+  <h1>八段錦極簡辨識（診斷版）</h1>
+  <div id="ver">檢查中…</div>
   <div id="err"></div>
-  <button id="startBtn">啟動辨識</button>
-  <br />
+  <button id="start">啟動辨識</button>
+  <br/>
   <canvas id="canvas" width="400" height="400"></canvas>
-  <div id="label-container"></div>
+  <div id="labels"></div>
+
+  <h3>本頁已載入的 script：</h3>
+  <pre id="scripts"></pre>
 
   <script>
-    // 顯示 tfjs 版本與 fromPixels 可用性
-    (function showVer(){
-      const verEl = document.getElementById('ver');
-      const v = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : "未載入";
-      const ok = !!(tf && tf.browser && typeof tf.browser.fromPixels === "function");
-      verEl.textContent = `tfjs 版本：${v}；fromPixels：${ok ? "OK" : "缺失"}`;
-    })();
+    const MODEL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
+    let model, webcam, ctx, labels, maxPredictions;
 
-    const MODEL_ROOT = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
-    let model, webcam, ctx, labelContainer, maxPredictions;
+    document.getElementById('start').onclick = init;
 
-    document.getElementById('startBtn').addEventListener('click', init);
-
-    function assertEnvOrThrow() {
-      if (!window.tmPose) throw new Error("tmPose 未載入（請確認 0.8 UMD 檔案路徑與順序）");
-      if (!tf.browser || typeof tf.browser.fromPixels !== "function") {
-        throw new Error("tf.browser.fromPixels 不可用（請強制重整 Ctrl/Cmd+Shift+R，或改用無痕視窗，以排除快取/衝突）");
+    function assertEnv() {
+      if (!window.tmPose) throw new Error('tmPose 未載入（請確認 0.8 UMD 並在 tfjs 之後載入）');
+      if (!tf.browser || typeof tf.browser.fromPixels !== 'function') {
+        throw new Error('tf.browser.fromPixels 不可用（表示 tfjs 版本被覆蓋或快取未清；請用無痕視窗/強制重整）');
       }
-      if (location.protocol !== "https:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
-        console.warn("非 HTTPS/localhost：瀏覽器可能拒絕攝影機權限。");
+      if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+        console.warn('非 HTTPS/localhost：瀏覽器可能拒絕攝影機。');
       }
     }
 
     async function init() {
-      const errEl = document.getElementById('err');
-      errEl.textContent = "";
-
+      const $err = document.getElementById('err');
+      $err.textContent = '';
       try {
-        assertEnvOrThrow();
+        assertEnv();
 
-        // 1) 載入模型
-        const modelURL = MODEL_ROOT + "model.json";
-        const metadataURL = MODEL_ROOT + "metadata.json";
+        const modelURL = MODEL + 'model.json';
+        const metadataURL = MODEL + 'metadata.json';
         model = await tmPose.load(modelURL, metadataURL);
         maxPredictions = model.getTotalClasses();
 
-        // 2) 啟用攝影機
-        webcam = new tmPose.Webcam(400, 400, true);
-        await webcam.setup(); // 會跳相機權限
+        const size = 400;
+        webcam = new tmPose.Webcam(size, size, true);
+        await webcam.setup();
         await webcam.play();
-        window.requestAnimationFrame(loop);
+        requestAnimationFrame(loop);
 
-        // 3) 畫布 / 標籤
-        ctx = document.getElementById("canvas").getContext("2d");
-        labelContainer = document.getElementById("label-container");
-        labelContainer.innerHTML = "";
+        const canvas = document.getElementById('canvas');
+        ctx = canvas.getContext('2d');
+
+        labels = document.getElementById('labels');
+        labels.innerHTML = '';
         for (let i = 0; i < maxPredictions; i++) {
-          labelContainer.appendChild(document.createElement("div"));
+          labels.appendChild(Object.assign(document.createElement('div'), {id:'lab'+i}));
         }
       } catch (e) {
-        console.error(e);
-        errEl.textContent = "⚠️ 無法啟動：" + e.message;
-      }
-    }
-
-    async function loop() {
-      webcam.update();
-      await predict();
-      window.requestAnimationFrame(loop);
-    }
-
-    async function predict() {
-      const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
-      const prediction = await model.predict(posenetOutput);
-
-      // 畫攝影機影像
-      ctx.drawImage(webcam.canvas, 0, 0);
-
-      // 畫關節/骨架
-      if (pose) {
-        tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
-        tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
-      }
-
-      // 顯示分類分數
-      for (let i = 0; i < maxPredictions; i++) {
-        const p = prediction[i];
-        labelContainer.childNodes[i].textContent =
-          `${p.className}: ${(p.probability * 100).toFixed(2)}%`;
-      }
-    }
-  </script>
-</body>
-</html>
+        console.erro
