@@ -3,317 +3,134 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識（無反引號安全版）</title>
+  <title>八段錦動作辨識（TM 原生相容版）</title>
   <style>
-    :root{color-scheme:light dark}
-    body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;margin:0;padding:20px;text-align:center}
-    h1{color:#2c3e50;margin:6px 0 12px}
-    #ver{color:#555;margin:4px 0 12px}
-    #msg{margin:8px 0 14px;font-weight:700;white-space:pre-line}
-    .ok{color:#16a34a}.bad{color:#dc2626}.warn{color:#b45309}
-    .btn{margin:8px 6px;padding:10px 16px;font-size:15px;border:0;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer}
-    .btn.secondary{background:#6b7280}
-    .wrap{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:420px 1fr;gap:16px;align-items:start}
-    canvas{display:block;margin:0 auto;border:2px solid #2c3e50;border-radius:12px;background:#000}
-    video{position:absolute;left:-9999px;top:-9999px;width:0;height:0}
-    .panel{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px 14px;text-align:left}
-    .title{font-size:14px;color:#6b7280;margin:0 0 8px}
-    #topClass{font-size:20px;font-weight:800;color:#1f2937;margin:8px 0}
-    .bar{display:flex;align-items:center;gap:10px;margin:8px 0}
-    .bar-name{width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1f2937}
-    .bar-track{flex:1;height:14px;background:#e5e7eb;border-radius:999px;overflow:hidden}
-    .bar-fill{height:100%;width:0%;background:#10b981;transition:width .12s linear}
-    .bar-pct{width:72px;text-align:right;color:#374151;font-variant-numeric:tabular-nums}
-    .note{font-size:13px;color:#6b7280;margin-top:6px}
-    .dbg{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;margin-top:10px;white-space:pre-wrap}
-    .beat{display:inline-block;width:10px;height:10px;border-radius:50%;background:#10b981;margin-left:6px;box-shadow:0 0 0 0 rgba(16,185,129,0.7);animation:pulse 1s infinite}
-    @keyframes pulse{0%{transform:scale(.95);box-shadow:0 0 0 0 rgba(16,185,129,.7)}70%{transform:scale(1);box-shadow:0 0 0 8px rgba(16,185,129,0)}100%{transform:scale(.95);box-shadow:0 0 0 0 rgba(16,185,129,0)}}
-    @media (max-width:900px){.wrap{grid-template-columns:1fr}}
+    body {font-family: Arial, sans-serif; background:#f5f7fb; margin:0; padding:24px; text-align:center;}
+    h1 {margin:8px 0 4px; color:#1f2937;}
+    #hint {color:#6b7280; margin:0 0 16px;}
+    .btn {padding:10px 16px; border:0; border-radius:8px; background:#2563eb; color:#fff; cursor:pointer; font-size:15px;}
+    .wrap {max-width:980px; margin:16px auto; display:grid; grid-template-columns:420px 1fr; gap:16px; align-items:start;}
+    #webcam {display:block; width:400px; height:400px; border-radius:12px; background:#000; margin:0 auto; border:2px solid #1f2937;}
+    .panel {background:#fff; border:1px solid #e5e7eb; border-radius:12px; text-align:left; padding:12px 14px;}
+    .row {display:flex; align-items:center; gap:10px; margin:8px 0;}
+    .name {width:240px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+    .track {flex:1; height:14px; background:#e5e7eb; border-radius:999px; overflow:hidden;}
+    .fill {height:100%; width:0%; background:#10b981; transition:width .12s linear;}
+    .pct {width:70px; text-align:right; font-variant-numeric:tabular-nums;}
+    .msg {margin-top:12px; white-space:pre-line;}
+    .ok{color:#16a34a}.warn{color:#b45309}.bad{color:#dc2626}
+    @media (max-width:900px){ .wrap {grid-template-columns:1fr} }
   </style>
 
-  <!-- 固定版本：TFJS 3.11.0 + PoseNet 2.2.1 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet@2.2.1/dist/posenet.min.js"></script>
+  <!-- ✅ Teachable Machine 官方相容版本 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 </head>
 <body>
-  <h1>八段錦動作辨識 <span id="beat" class="beat" style="visibility:hidden;" title="推論心跳"></span></h1>
-  <div id="ver">初始化中…</div>
-
-  <button id="btnCheck" class="btn">① 相機自檢</button>
-  <button id="btnStart" class="btn">② 載入模型並開始</button>
-  <button id="btnFlip" class="btn secondary" title="前鏡頭通常需鏡像">切換鏡像：開</button>
-  <button id="btnCamFacing" class="btn secondary" title="切換前/後鏡頭">鏡頭：前</button>
-
-  <div id="msg"></div>
+  <h1>八段錦動作辨識（Teachable Machine 相容）</h1>
+  <div id="hint">請於 HTTPS 或 localhost 開啟。此版本與 TM 預覽相同流程，辨識表現會與訓練時一致。</div>
+  <button class="btn" id="btnStart">開始辨識</button>
+  <div class="msg" id="msg"></div>
 
   <div class="wrap">
-    <canvas id="canvas" width="400" height="400"></canvas>
-
-    <div>
-      <div class="panel">
-        <p class="title">即時辨識結果</p>
-        <div id="topClass">尚未開始</div>
-        <div id="bars"></div>
-        <div id="labelWarn" class="note"></div>
-        <div id="qualityNote" class="note"></div>
-      </div>
-
-      <div class="panel">
-        <p class="title">除錯面板（自動更新）</p>
-        <div id="debug" class="dbg">等待開始…</div>
-      </div>
+    <canvas id="webcam" width="400" height="400"></canvas>
+    <div class="panel">
+      <div id="bars"></div>
     </div>
   </div>
 
-  <video id="video" playsinline autoplay muted></video>
-
 <script>
 (function(){
-  // 固定 D1~D8 顯示
-  var DESIRED_8 = [
-    '雙手托天理三焦',
-    '左右開弓似射鵰',
-    '調理脾胃須單舉',
-    '五勞七傷往後瞧',
-    '搖頭擺尾去心火',
-    '兩手攀足固腎腰',
-    '攢拳怒目增氣力',
-    '背後七顛百病消'
-  ];
+  // ---- 兼容 shim：修復 Pt.fromPixels 與 tf.fromPixels ----
+  // teachablemachine-pose@0.8 內部會引用 Pt.fromPixels；把 Pt 指到 tf。
+  window.Pt = window.tf;
+  // 舊版 TM 會呼叫 tf.fromPixels；若不存在則橋接到 tf.browser.fromPixels
+  if (typeof tf.fromPixels !== 'function' && tf.browser && typeof tf.browser.fromPixels === 'function') {
+    tf.fromPixels = tf.browser.fromPixels;
+  }
 
   var modelURL = './model.json';
   var metadataURL = './metadata.json';
+  var model, webcam, ctx, labelContainer, maxPredictions;
+  var barsEl = document.getElementById('bars');
+  var msgEl  = document.getElementById('msg');
+  var canvas = document.getElementById('webcam');
+  ctx = canvas.getContext('2d');
 
-  var PNET_CFG = { architecture:'MobileNetV1', outputStride:16, inputResolution:{width:257,height:257}, multiplier:0.75 };
+  log('TensorFlow.js=' + (tf && tf.version && tf.version.tfjs));
 
-  var SMOOTH_ALPHA = 0.2, LOCK_FRAMES=6, MIN_KP_SCORE=0.25, SKIP_MSG_COOLDOWN=30;
+  document.getElementById('btnStart').onclick = function(){ start(); };
 
-  var verEl=document.getElementById('ver'), msgEl=document.getElementById('msg');
-  var video=document.getElementById('video'), canvas=document.getElementById('canvas'), ctx=canvas.getContext('2d');
-  var dbg=document.getElementById('debug'), barsEl=document.getElementById('bars'), beat=document.getElementById('beat');
-  function $(id){ return document.getElementById(id); }
-  function cssId(n){ return n.replace(/\s+/g,'-').replace(/[^-\w]/g,''); }
-
-  var classifier, labels=[], posenetModel;
-  var running=false, flip=true, facingMode='user';
-  var displayOrder=[], idxMap=[], smooth={}, lastStable='';
-  var lockName='', lockCount=0, skipMsgCooldown=0;
-
-  verEl.textContent = 'SecureContext=' + window.isSecureContext + ' | tfjs=' + ((tf && tf.version && tf.version.tfjs) || '未載') + ' | backend=' + (tf.getBackend() || '-');
-  function info(t, ok){ msgEl.className = ok===true?'ok':(ok===false?'bad':''); msgEl.textContent = t; }
-
-  // 相機自檢
-  $('btnCheck').onclick = async function(){
-    info('');
+  async function start(){
     try{
-      if(!window.isSecureContext) throw new Error('此頁面不是 HTTPS 或 localhost');
-      var st = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
-      st.getTracks().forEach(function(t){ t.stop(); });
-      info('✅ 相機檢測成功', true);
+      // 載入 tmPose 模型（與 TM 預覽相同）
+      model = await tmPose.load(modelURL, metadataURL);
+      maxPredictions = model.getTotalClasses();
+
+      // 建立 webcam（與 TM 預覽相同：size=400, flip=true）
+      const size = 400, flip = true;
+      webcam = new tmPose.Webcam(size, size, flip);
+      await webcam.setup();               // 取得權限
+      await webcam.play();                // 開始串流
+      window.requestAnimationFrame(loop); // 進入推論迴圈
+
+      // 畫面與條列
+      canvas.width = size; canvas.height = size;
+      labelContainer = document.createElement('div');
+      labelContainer.className = 'list';
+      buildBars();
+
+      log('✅ 模型與相機就緒', 'ok');
     }catch(e){
-      info('相機自檢失敗：' + e.name + '\n' + (e.message||''), false);
-    }
-  };
-
-  // 鏡像/前後鏡頭
-  $('btnFlip').onclick = function(){ flip=!flip; $('btnFlip').textContent='切換鏡像：' + (flip?'開':'關'); };
-  $('btnCamFacing').onclick = async function(){
-    facingMode = (facingMode==='user')?'environment':'user';
-    $('btnCamFacing').textContent='鏡頭：' + (facingMode==='user'?'前':'後');
-    if (running) await restartStream();
-  };
-
-  // 開始
-  $('btnStart').onclick = async function(){
-    try{
-      info('載入中…');
-      try{ await tf.setBackend('webgl'); }catch(e){ await tf.setBackend('cpu'); }
-      await tf.ready();
-
-      // 讀 labels
-      var meta = await fetch(metadataURL,{cache:'no-store'}).then(function(r){ return r.json(); });
-      labels = meta.labels || meta.classes || [];
-      if (!Array.isArray(labels) || labels.length === 0) throw new Error('metadata.json 缺少 labels');
-
-      // 解析 D1..D8
-      function parseD(s){ var m = /D\s*([1-8])/i.exec(s||''); return m ? (parseInt(m[1],10)-1) : -1; }
-      idxMap = labels.map(parseD);
-      var okMap = idxMap.every(function(i){return i>=0;}) && (new Set(idxMap)).size >= Math.min(8,labels.length);
-      if (okMap){
-        displayOrder = DESIRED_8.slice(0);
-        $('labelWarn').innerHTML = '<span class="ok">✅ 已依 D1~D8 自動對齊為八段錦中文順序。</span>';
-      }else{
-        displayOrder = labels.slice(0);
-        $('labelWarn').innerHTML = '<span class="warn">⚠️ 標籤格式不是 D1~D8，改用原生 labels 顯示。</span>';
-      }
-
-      // 載入分類器/posenet
-      await fetch(modelURL,{cache:'no-store'}).then(function(r){ if(!r.ok) throw new Error('model.json HTTP '+ r.status); return r; });
-      classifier = await tf.loadLayersModel(modelURL);
-      posenetModel = await posenet.load(PNET_CFG);
-
-      await restartStream();
-      canvas.width=400; canvas.height=400;
-      buildBars(displayOrder);
-
-      info('✅ 模型載入完成，相機啟動成功！', true);
-      running=true; beat.style.visibility='visible';
-      requestAnimationFrame(loop);
-    }catch(e){
-      info('❌ 無法載入：\n' + (e.message||e.toString()), false);
+      log('❌ 初始化失敗：\n' + (e && e.message ? e.message : String(e)), 'bad');
       console.error(e);
     }
-  };
-
-  async function restartStream(){
-    try{ var old=video.srcObject; if(old) old.getTracks().forEach(function(t){t.stop();}); }catch(_){}
-    var st=await navigator.mediaDevices.getUserMedia({ video:{ facingMode: facingMode }, audio:false });
-    video.srcObject=st; await video.play();
   }
 
-  function buildBars(names){
-    barsEl.innerHTML=''; smooth={};
-    for(var k=0;k<names.length;k++){
-      var n = names[k];
-      smooth[n]=0;
-
-      var row = document.createElement('div'); row.className='bar';
-      var left = document.createElement('div'); left.className='bar-name'; left.title=n; left.textContent=n;
-      var track = document.createElement('div'); track.className='bar-track';
-      var fill = document.createElement('div'); fill.className='bar-fill'; fill.id='fill-'+cssId(n); fill.style.width='0%';
-      track.appendChild(fill);
-      var pct = document.createElement('div'); pct.className='bar-pct'; pct.id='pct-'+cssId(n); pct.textContent='0.00%';
-
-      row.appendChild(left); row.appendChild(track); row.appendChild(pct);
+  function buildBars(){
+    barsEl.innerHTML = '';
+    for (var i=0;i<maxPredictions;i++){
+      var row  = document.createElement('div'); row.className='row';
+      var name = document.createElement('div'); name.className='name'; name.textContent = model.poseMetadata.labels[i].label;
+      var track= document.createElement('div'); track.className='track';
+      var fill = document.createElement('div'); fill.className='fill'; fill.id='fill-'+i;
+      var pct  = document.createElement('div'); pct.className='pct'; pct.id='pct-'+i; pct.textContent='0.00%';
+      track.appendChild(fill); row.appendChild(name); row.appendChild(track); row.appendChild(pct);
       barsEl.appendChild(row);
     }
-    dbg.textContent = 'labels: ' + JSON.stringify(labels) + '\n' +
-                      'idxMap: ' + JSON.stringify(idxMap) + '\n' +
-                      'using: ' + JSON.stringify(displayOrder) + '\n';
   }
 
-  // 14739 特徵
-  function makeFeatures14739(heatmap, offsets){
-    var h = heatmap.reshape([17*17*17]);
-    var o = offsets.reshape([17*17*34]);
-    var concat = tf.concat([h, o]);
-    var out = concat.reshape([1, 14739]);
-    h.dispose(); o.dispose(); concat.dispose();
-    return out;
-  }
-  function posenetPredictRaw(x){ return posenetModel.baseModel.predict(x); } // 3D 可
-
-  async function loop(){ if(!running) return; await predictOnce(); requestAnimationFrame(loop); }
-
-  async function predictOnce(){
-    // 視覺畫面（Canvas）
-    if (flip){
-      ctx.save(); ctx.scale(-1,1);
-      ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
-      ctx.restore();
-    } else {
-      ctx.drawImage(video,0,0,canvas.width,canvas.height);
-    }
-
-    // 姿勢（估姿用 flipHorizontal）
-    var pose = await posenetModel.estimateSinglePose(video, { flipHorizontal: flip });
-    var okScores = pose.keypoints.filter(function(k){return k.score>0;}).map(function(k){return k.score;});
-    var avgScore = okScores.length ? okScores.reduce(function(a,b){return a+b;},0)/okScores.length : 0;
-
-    var frameSkipped = false;
-    if (avgScore < MIN_KP_SCORE){
-      frameSkipped = true;
-      $('qualityNote').innerHTML = '<span class="warn">⚠️ 人體偵測品質偏低（平均 ' + avgScore.toFixed(2) + '）。請：站遠一點、補光、全身入鏡、背景簡單。</span>';
-    } else {
-      $('qualityNote').textContent='';
-    }
-
-    drawKeypoints(pose.keypoints, 0.5, ctx);
-    drawSkeleton(pose.keypoints, 0.5, ctx);
-
-    // === 取 raw outputs → 14739 → 分類（3D 張量，鏡像用 tf.reverse）===
-    var probs=[];
-    if (!frameSkipped){
-      var feat = tf.tidy(function(){
-        var t = tf.browser.fromPixels(video).toFloat();              // [H,W,3]
-        t = tf.image.resizeBilinear(t, [257,257]).div(127.5).sub(1); // [257,257,3]
-        if (flip) t = tf.reverse(t, [1]);                            // 左右翻
-        var out = posenetPredictRaw(t);                              // PoseNet 會處理 batch
-        var heatmap = out.heatmapScores;                             // [1,17,17,17]
-        var offsets = out.offsets;                                   // [1,17,17,34]
-        var f = makeFeatures14739(heatmap, offsets);                 // [1,14739]
-        t.dispose();
-        return f;
-      });
-
-      var logits = classifier.predict(feat);
-      var probT  = tf.softmax(logits);
-      probs = Array.from(await probT.data());
-      probT.dispose(); logits.dispose(); feat.dispose();
-    } else {
-      probs = new Array(labels.length).fill(0);
-    }
-
-    // 依 D1~D8 聚合到固定 8 條
-    var mapDisplay = {}; for(var i0=0;i0<DESIRED_8.length;i0++){ mapDisplay[DESIRED_8[i0]] = 0; }
-    for (var i=0;i<labels.length;i++){
-      var d = idxMap[i];
-      if (d>=0 && d<DESIRED_8.length) mapDisplay[DESIRED_8[d]] += (probs[i]||0);
-    }
-
-    // 平滑 + 遲滯 + UI
-    var topName=DESIRED_8[0], topProb=0;
-    for (var j=0;j<DESIRED_8.length;j++){
-      var name = DESIRED_8[j];
-      var p = mapDisplay[name] || 0;
-      var val = SMOOTH_ALPHA*p + (1-SMOOTH_ALPHA)*(smooth[name]||0);
-      smooth[name]=val;
-
-      var pct = val*100, id=cssId(name);
-      var fill=document.getElementById('fill-'+id), txt=document.getElementById('pct-'+id);
-      if (fill) fill.style.width = pct.toFixed(2) + '%';
-      if (txt)  txt.textContent  = pct.toFixed(2) + '%';
-
-      if (p > topProb){ topProb=p; topName=name; }
-    }
-    if (topName === lockName) lockCount++; else { lockName=topName; lockCount=1; }
-    var stable = (lockCount>=LOCK_FRAMES)? lockName : (lastStable||lockName);
-    lastStable = stable;
-    $('topClass').textContent = '目前辨識：' + (stable || '—') + '（' + (topProb*100).toFixed(2) + '%）';
-
-    // 除錯（聚合後 top3）
-    var arr = DESIRED_8.map(function(n){ return {n:n, p:(mapDisplay[n]||0)}; })
-                       .sort(function(a,b){return b.p-a.p;}).slice(0,3);
-    dbg.textContent =
-      'labels: ' + JSON.stringify(labels) + '\n' +
-      'idxMap: ' + JSON.stringify(idxMap) + '\n' +
-      'avg keypoint score: ' + avgScore.toFixed(2) + (frameSkipped?' (frame skipped)':'') + '\n' +
-      'top3: ' + arr.map(function(x){return x.n + '=' + (x.p*100).toFixed(2) + '%';}).join(' | ') + '\n';
+  async function loop(){
+    webcam.update();      // 取得最新畫面
+    await predict();      // 預測並更新條列
+    window.requestAnimationFrame(loop);
   }
 
-  // 畫關鍵點/骨架
-  function toTuple(p){ return [p.x, p.y]; }
-  function drawKeypoints(keypoints, minConfidence, ctx) {
-    keypoints.forEach(function(kp){
-      if (kp.score < minConfidence) return;
-      var y = kp.position.y, x = kp.position.x;
-      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI*2);
-      ctx.fillStyle = 'rgba(16,185,129,0.9)'; ctx.fill();
-    });
+  async function predict(){
+    // 估姿 + 分類（完全沿用 tmPose 內部流程）
+    const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+    const prediction = await model.predict(posenetOutput);
+
+    // 繪製到 canvas
+    ctx.drawImage(webcam.canvas, 0, 0);
+    if (pose){
+      tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
+      tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
+    }
+
+    // 更新條列
+    for (var i=0;i<maxPredictions;i++){
+      var p = prediction[i].probability;
+      var fill = document.getElementById('fill-'+i);
+      var pct  = document.getElementById('pct-'+i);
+      var val = (p*100).toFixed(2) + '%';
+      if (fill) fill.style.width = val;
+      if (pct)  pct.textContent  = val;
+    }
   }
-  var adjacentKeyPoints = [
-    [5,7],[7,9],[6,8],[8,10],[5,6],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]
-  ];
-  function drawSkeleton(keypoints, minConfidence, ctx) {
-    adjacentKeyPoints.forEach(function(pair){
-      var i=pair[0], j=pair[1];
-      var kp1 = keypoints[i], kp2 = keypoints[j];
-      if (kp1.score < minConfidence || kp2.score < minConfidence) return;
-      ctx.beginPath();
-      var t1 = toTuple(kp1.position), t2 = toTuple(kp2.position);
-      ctx.moveTo(t1[0],t1[1]); ctx.lineTo(t2[0],t2[1]);
-      ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(59,130,246,0.9)'; ctx.stroke();
-    });
+
+  function log(text, cls){
+    msgEl.className = 'msg ' + (cls||''); msgEl.textContent = text;
   }
 })();
 </script>
