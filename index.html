@@ -1,13 +1,19 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
-  <title>Baduanjin Pose Detection</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Teachable Machine - 八段錦動作辨識</title>
+
+  <!-- ✅ 正確的 tfjs v3.11.0 -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
+
+  <!-- ✅ 正確的 TeachableMachine Pose v0.8 -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+
   <style>
     body {
-      font-family: 'Arial', sans-serif;
+      font-family: Arial, sans-serif;
       background: #f0f4f8;
       display: flex;
       flex-direction: column;
@@ -27,47 +33,45 @@
       color: #34495e;
     }
     button {
+      margin-top: 20px;
       padding: 10px 20px;
       font-size: 16px;
       background-color: #2980b9;
       color: white;
       border: none;
-      cursor: pointer;
       border-radius: 5px;
+      cursor: pointer;
     }
   </style>
 </head>
 <body>
-  <h1>Baduanjin Pose Detection</h1>
-  <button type="button" onclick="init()">Start</button>
+  <h1>八段錦動作辨識</h1>
+  <button onclick="init()">啟動辨識</button>
+  <div><canvas id="canvas"></canvas></div>
   <div id="label-container"></div>
-  <canvas id="canvas"></canvas>
 
-  <script type="text/javascript">
-    const URL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
+  <script>
     let model, webcam, ctx, labelContainer, maxPredictions;
 
     async function init() {
-      const modelURL = URL + "model.json";
-      const metadataURL = URL + "metadata.json";
+      const modelURL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/model.json";
+      const metadataURL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/metadata.json";
 
-      // ✅ 載入模型與標籤
       model = await tmPose.load(modelURL, metadataURL);
       maxPredictions = model.getTotalClasses();
 
-      // ✅ 初始化攝影機
       const size = 400;
       const flip = true;
+
       webcam = new tmPose.Webcam(size, size, flip);
-      await webcam.setup();
+      await webcam.setup(); // ⚠️這裡會要求使用者開啟攝影機
       await webcam.play();
       window.requestAnimationFrame(loop);
 
-      // ✅ 顯示畫面與預測結果
-      const canvas = document.getElementById("canvas");
-      canvas.width = size;
-      canvas.height = size;
-      ctx = canvas.getContext("2d");
+      document.getElementById("canvas").width = size;
+      document.getElementById("canvas").height = size;
+      ctx = document.getElementById("canvas").getContext("2d");
+
       labelContainer = document.getElementById("label-container");
       labelContainer.innerHTML = "";
       for (let i = 0; i < maxPredictions; i++) {
@@ -75,7 +79,7 @@
       }
     }
 
-    async function loop(timestamp) {
+    async function loop() {
       webcam.update();
       await predict();
       window.requestAnimationFrame(loop);
@@ -85,37 +89,18 @@
       const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
       const prediction = await model.predict(posenetOutput);
 
-      // 顯示預測分數
+      ctx.drawImage(webcam.canvas, 0, 0);
+      if (pose) {
+        tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
+        tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
+      }
+
       for (let i = 0; i < maxPredictions; i++) {
         const classPrediction =
-          prediction[i].className + ": " + prediction[i].probability.toFixed(2);
+          prediction[i].className + ": " + (prediction[i].probability * 100).toFixed(2) + "%";
         labelContainer.childNodes[i].innerHTML = classPrediction;
       }
-
-      // 畫出姿勢
-      drawPose(pose);
     }
-
-    function drawPose(pose) {
-      if (webcam.canvas) {
-        ctx.drawImage(webcam.canvas, 0, 0);
-        if (pose) {
-          const minPartConfidence = 0.5;
-          for (let i = 0; i < pose.keypoints.length; i++) {
-            const keypoint = pose.keypoints[i];
-            if (keypoint.score > minPartConfidence) {
-              ctx.beginPath();
-              ctx.arc(keypoint.position.x, keypoint.position.y, 5, 0, 2 * Math.PI);
-              ctx.fillStyle = "red";
-              ctx.fill();
-            }
-          }
-        }
-      }
-    }
-
-    // ✅ 確認 tf 是否載入成功
-    console.log("✅ TensorFlow.js version:", tf.version.tfjs);
   </script>
 </body>
 </html>
