@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識（自動索引對齊 labels）</title>
+  <title>八段錦動作辨識（修正版：強制 softmax + 長度對齊）</title>
   <style>
     :root{color-scheme:light dark}
     body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;margin:0;padding:20px;text-align:center}
@@ -26,15 +26,17 @@
     .bar-pct{width:72px;text-align:right;color:#374151;font-variant-numeric:tabular-nums}
     .note{font-size:13px;color:#6b7280;margin-top:6px}
     .dbg{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;margin-top:10px;white-space:pre-wrap}
+    .beat{display:inline-block;width:10px;height:10px;border-radius:50%;background:#10b981;margin-left:6px;box-shadow:0 0 0 0 rgba(16,185,129,0.7);animation:pulse 1s infinite}
+    @keyframes pulse{0%{transform:scale(.95);box-shadow:0 0 0 0 rgba(16,185,129,.7)}70%{transform:scale(1);box-shadow:0 0 0 8px rgba(16,185,129,0)}100%{transform:scale(.95);box-shadow:0 0 0 0 rgba(16,185,129,0)}}
     @media (max-width:900px){.wrap{grid-template-columns:1fr}}
   </style>
 
-  <!-- 我們用 PoseNet + 你本地的分類器，完全不載 tmPose -->
+  <!-- TFJS + PoseNet（不載 tmPose） -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet@2.2.1/dist/posenet.min.js"></script>
 </head>
 <body>
-  <h1>八段錦動作辨識</h1>
+  <h1>八段錦動作辨識 <span id="beat" class="beat" title="推論心跳" style="visibility:hidden;"></span></h1>
   <div id="ver">初始化中…</div>
 
   <button id="btnCheck" class="btn">① 相機自檢</button>
@@ -79,34 +81,34 @@
     '背後七顛百病消'
   ];
 
-  const modelURL    = './model.json';
+  const modelURL = './model.json';
   const metadataURL = './metadata.json';
 
-  // PoseNet 設定（與 TM 常見設定一致 → 14739 維）
+  // PoseNet 設定（對應 14739 維）
   const PNET_CFG = { architecture:'MobileNetV1', outputStride:16, inputResolution:{width:257,height:257}, multiplier:0.75 };
 
   // 穩定化參數
   const SMOOTH_ALPHA = 0.2;
-  const LOCK_FRAMES  = 8;
-  const MIN_KP_SCORE = 0.3;
-  const SKIP_MSG_COOLDOWN = 20;
+  const LOCK_FRAMES  = 6;     // 略微降低以提升靈敏度
+  const MIN_KP_SCORE = 0.25;  // 放寬一點，避免一直略過
+  const SKIP_MSG_COOLDOWN = 30;
 
   // DOM
   const verEl=document.getElementById('ver'), msgEl=document.getElementById('msg');
   const video=document.getElementById('video'), canvas=document.getElementById('canvas'), ctx=canvas.getContext('2d');
-  const dbg=document.getElementById('debug'), barsEl=document.getElementById('bars');
+  const dbg=document.getElementById('debug'), barsEl=document.getElementById('bars'), beat=document.getElementById('beat');
   const $=id=>document.getElementById(id), cssId=n=>n.replace(/\s+/g,'-').replace(/[^-\w]/g,'');
 
   let classifier, labels=[], posenetModel;
   let running=false, flip=true, facingMode='user';
   let displayOrder=[], aliasMap={}, smooth={}, lastStable='';
-  let lockName='', lockCount=0, skipMsgCooldown=0;
+  let lockName='', lockCount=0, skipMsgCooldown=0, frameId=0;
 
   verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | backend=${tf.getBackend()||'-'}`;
   function info(t, ok){ msgEl.className = ok===true?'ok':(ok===false?'bad':''); msgEl.textContent = t; }
 
   // 相機自檢
-  document.getElementById('btnCheck').onclick = async ()=>{
+  $('btnCheck').onclick = async ()=>{
     info('');
     try{
       if(!window.isSecureContext) throw new Error('此頁面不是 HTTPS 或 localhost，瀏覽器會封鎖相機');
@@ -118,18 +120,16 @@
     }
   };
 
-  // 鏡像切換
-  document.getElementById('btnFlip').onclick = ()=>{
-    flip=!flip; document.getElementById('btnFlip').textContent=`切換鏡像：${flip?'開':'關'}`;
-  };
-  // 前/後鏡頭切換
-  document.getElementById('btnCamFacing').onclick = async ()=>{
+  // 鏡像/前後鏡頭
+  $('btnFlip').onclick = ()=>{ flip=!flip; $('btnFlip').textContent=`切換鏡像：${flip?'開':'關'}`; };
+  $('btnCamFacing').onclick = async ()=>{
     facingMode = (facingMode==='user')?'environment':'user';
-    document.getElementById('btnCamFacing').textContent=`鏡頭：${facingMode==='user'?'前':'後'}`;
+    $('btnCamFacing').textContent=`鏡頭：${facingMode==='user'?'前':'後'}`;
     if (running) await restartStream();
   };
 
-  document.getElementById('btnStart').onclick = async ()=>{
+  // 開始
+  $('btnStart').onclick = async ()=>{
     try{
       info('載入中…');
       try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
@@ -140,14 +140,13 @@
       labels = meta.labels || meta.classes || [];
       if (!Array.isArray(labels) || labels.length === 0) throw new Error('metadata.json 缺少 labels');
 
-      // 1) 依索引自動對齊：若 labels 數量 = 8，建立 alias：labels[i] → DESIRED_NAMES[i]
+      // 依索引把模型 labels 映射為八段錦中文（若剛好 8 類）
       aliasMap = {};
       if (labels.length === DESIRED_NAMES.length) {
         labels.forEach((lb,i)=> aliasMap[lb] = DESIRED_NAMES[i]);
-        displayOrder = DESIRED_NAMES.slice();  // 強制用八段錦順序顯示
+        displayOrder = DESIRED_NAMES.slice();
         $('labelWarn').innerHTML = `<span class="ok">✅ 已依索引自動把模型 labels 對齊為八段錦中文。</span>`;
       } else {
-        // 否則退而用模型原生 labels
         displayOrder = labels.slice();
         $('labelWarn').innerHTML = `⚠️ <span class="warn">模型輸出數量為 ${labels.length}，與八段錦 8 式不一致。先以模型 labels 顯示。</span>`;
       }
@@ -156,16 +155,16 @@
       await fetch(modelURL,{cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`model.json HTTP ${r.status}`); });
       classifier = await tf.loadLayersModel(modelURL);
 
-      // 載 PoseNet
+      // PoseNet
       posenetModel = await posenet.load(PNET_CFG);
 
-      // 啟動相機 & 建條
+      // 相機 & UI
       await restartStream();
       canvas.width=400; canvas.height=400;
       buildBars(displayOrder);
 
       info('✅ 模型載入完成，相機啟動成功！', true);
-      running=true;
+      running=true; beat.style.visibility='visible';
       requestAnimationFrame(loop);
     }catch(e){
       info('❌ 無法載入：\n' + (e.message||e.toString()), false);
@@ -193,11 +192,11 @@
       barsEl.appendChild(row);
     });
     dbg.textContent = `labels(from metadata): ${JSON.stringify(labels)}\n` +
-                      `alias(by index): ${JSON.stringify(aliasMap)}\n` +
+                      `alias(by index if 8): ${JSON.stringify(aliasMap)}\n` +
                       `using order: ${JSON.stringify(displayOrder)}\n`;
   }
 
-  // 14739 特徵：heatmap(4913) + offsets(9826)
+  // 14739 特徵
   function makeFeatures14739(heatmap, offsets){
     const h = heatmap.reshape([17*17*17]);
     const o = offsets.reshape([17*17*34]);
@@ -211,11 +210,12 @@
   async function loop(){
     if(!running) return;
     await predictOnce();
+    frameId++;
     requestAnimationFrame(loop);
   }
 
   async function predictOnce(){
-    // 畫面（鏡像）
+    // 畫面
     if (flip){ ctx.save(); ctx.scale(-1,1); ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height); ctx.restore(); }
     else { ctx.drawImage(video,0,0,canvas.width,canvas.height); }
 
@@ -225,7 +225,7 @@
     const avgScore = okScores.length ? okScores.reduce((a,b)=>a+b,0)/okScores.length : 0;
     let frameSkipped = false;
 
-    if (avgScore < 0.3){
+    if (avgScore < MIN_KP_SCORE){
       frameSkipped = true;
       if (skipMsgCooldown<=0){
         $('qualityNote').innerHTML = `⚠️ <span class="warn">人體偵測品質偏低（平均 ${avgScore.toFixed(2)}）。請：站遠一點、補光、全身入鏡、背景簡單。</span>`;
@@ -237,7 +237,7 @@
     drawSkeleton(pose.keypoints, 0.5, ctx);
 
     // 取 raw outputs → 14739 → 分類
-    let probs;
+    let probs=[], rawLen=0;
     if (!frameSkipped){
       const feat = tf.tidy(()=>{
         let t = tf.browser.fromPixels(video).toFloat();
@@ -249,16 +249,25 @@
         t.dispose();
         return f;
       });
-      const pred = classifier.predict(feat);
-      probs = Array.from(await pred.data());
-      pred.dispose(); feat.dispose();
+
+      const logits = classifier.predict(feat);   // 可能是 logits
+      rawLen = logits.shape[1] || 0;
+
+      // ★ 強制 softmax → 機率
+      const probT = tf.softmax(logits);
+      probs = Array.from(await probT.data());
+      probT.dispose(); logits.dispose(); feat.dispose();
     } else {
-      probs = displayOrder.map(()=>0);
+      probs = new Array(displayOrder.length).fill(0);
+      rawLen = probs.length;
     }
 
     // labels → 顯示名（依索引別名）
-    const mappedLabels = labels.map(lb => aliasMap[lb] ?? lb);
-    const map = {}; mappedLabels.forEach((name,i)=> map[name] = probs[i] || 0);
+    const mappedLabels = labels.map((lb,i)=> (labels.length===DESIRED_NAMES.length ? DESIRED_NAMES[i] : lb));
+    // 對齊最短長度，避免長度不一致
+    const L = Math.min(mappedLabels.length, probs.length);
+    const map = {};
+    for (let i=0;i<L;i++){ map[mappedLabels[i]] = probs[i] || 0; }
 
     // 平滑 + 遲滯
     let topName = displayOrder[0] || '', topProb = 0;
@@ -280,16 +289,22 @@
     const stable = (lockCount>=LOCK_FRAMES)? lockName : (lastStable||lockName);
     lastStable = stable;
 
-    document.getElementById('topClass').textContent = `目前辨識：${stable || '—'}（${(topProb*100).toFixed(2)}%）`;
+    $('topClass').textContent = `目前辨識：${stable || '—'}（${(topProb*100).toFixed(2)}%）`;
 
-    // 除錯：top3
-    const pairs = mappedLabels.map((n,i)=>({n, p: probs[i]||0})).sort((a,b)=>b.p-a.p).slice(0,3);
+    // 除錯：顯示長度與 top3
+    const pairs = [];
+    for (let i=0;i<L;i++) pairs.push({n:mappedLabels[i], p:probs[i]||0});
+    pairs.sort((a,b)=>b.p-a.p);
+    const top3 = pairs.slice(0,3).map(x=>`${x.n}=${(x.p*100).toFixed(2)}%`).join(' | ');
+
     dbg.textContent =
       `labels(from metadata): ${JSON.stringify(labels)}\n` +
-      `alias(by index): ${JSON.stringify(aliasMap)}\n` +
+      `mapped (by index if 8): ${JSON.stringify(mappedLabels)}\n` +
       `using order: ${JSON.stringify(displayOrder)}\n` +
+      `probs.length=${probs.length}, labels.length=${labels.length}${probs.length!==labels.length?'  <-- ⚠️ 長度不一致，已自動對齊最短':''}\n` +
       `avg keypoint score: ${avgScore.toFixed(2)} ${frameSkipped?'(frame skipped)':''}\n` +
-      `top3: ${pairs.map(x=>`${x.n}=${(x.p*100).toFixed(2)}%`).join(' | ')}\n`;
+      `top3: ${top3}\n`;
+
   }
 
   // 畫關鍵點/骨架
