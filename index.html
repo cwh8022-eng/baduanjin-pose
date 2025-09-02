@@ -3,204 +3,122 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦辨識（鎖定 tfjs 1.7.4，固定八式順序）</title>
+  <title>八段錦診斷頁（不開 Console）</title>
   <style>
-    :root{color-scheme:light dark}
-    body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;margin:0;padding:20px;text-align:center}
-    h1{color:#2c3e50;margin:6px 0 12px}
-    #ver{color:#555;margin:4px 0 12px}
-    #msg{margin:8px 0 14px;font-weight:700;color:#c0392b;white-space:pre-line}
-    .btn{margin:8px 6px;padding:10px 16px;font-size:15px;border:0;border-radius:8px;background:#2980b9;color:#fff;cursor:pointer}
-    .wrap{max-width:1080px;margin:0 auto;display:grid;grid-template-columns:420px 1fr;gap:16px;align-items:start}
-    canvas{display:block;margin:0 auto;border:2px solid #2c3e50;border-radius:12px;background:#000}
-    .panel{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px 14px;text-align:left}
-    .title{font-size:14px;color:#6b7280;margin:0 0 8px}
-    #topClass{font-size:20px;font-weight:800;color:#1f2937;margin-bottom:8px}
-    .bar{display:flex;align-items:center;gap:10px;margin:8px 0}
-    .bar-name{width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1f2937}
-    .bar-track{flex:1;height:14px;background:#e5e7eb;border-radius:999px;overflow:hidden}
-    .bar-fill{height:100%;width:0%;background:#10b981;transition:width .12s linear}
-    .bar-pct{width:72px;text-align:right;color:#374151;font-variant-numeric:tabular-nums}
-    @media (max-width:900px){.wrap{grid-template-columns:1fr}}
+    body{font-family:Arial,Helvetica,sans-serif;background:#f6f8fb;margin:0;padding:24px}
+    h1{margin:0 0 12px}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:12px 0}
+    .ok{color:#16a34a}.bad{color:#dc2626}.warn{color:#ca8a04}
+    code{background:#f1f5f9;padding:2px 6px;border-radius:6px}
+    button{padding:8px 14px;border:0;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer}
+    ul{margin:6px 0 0 18px}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
   </style>
 
-  <!-- 1) 只載「一次」 tfjs 1.7.4（這版內建 tf.fromPixels） -->
+  <!-- 僅載 tfjs 1.7.4；先不載 tmPose -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
-
-  <!-- 2) 立刻把 window.tf 鎖死，避免任何覆寫；同時把 fromPixels 固化 -->
-  <script>
-    (function hardLockTF(){
-      if(!window.tf){ console.error('[hardLockTF] tf not found'); return; }
-      // 若沒有舊 API，就從 browser 版映射一次
-      if (typeof tf.fromPixels !== 'function' && tf.browser && typeof tf.browser.fromPixels === 'function') {
-        try { Object.defineProperty(tf, 'fromPixels', { value: tf.browser.fromPixels.bind(tf.browser), writable:false, configurable:false }); }
-        catch(_) { tf.fromPixels = tf.browser.fromPixels.bind(tf.browser); }
-        console.log('[hard] install tf.fromPixels from tf.browser.fromPixels');
-      }
-      // 把 tf 本身凍結，避免其方法被改
-      try { Object.freeze(tf); } catch(_) {}
-      // 把 window.tf 設為不可寫、不可重新定義（最關鍵）
-      try {
-        Object.defineProperty(window, 'tf', { value: tf, writable: false, configurable: false, enumerable: true });
-        console.log('[hard] window.tf locked');
-      } catch(e) {
-        console.warn('[hard] cannot lock window.tf', e);
-      }
-    })();
-  </script>
-
-  <!-- 3) 再載 tmPose（這時它拿到的 tf 一定有 fromPixels） -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 </head>
 <body>
-  <h1>八段錦動作辨識（鎖定 tfjs 1.7.4）</h1>
-  <div id="ver">初始化中…</div>
+  <h1>八段錦診斷頁（不開 Console 版）</h1>
 
-  <button id="btnCheck" class="btn">① 相機自檢</button>
-  <button id="btnStart" class="btn">② 載入模型並開始</button>
+  <div class="card">
+    <b>環境</b>
+    <div id="env"></div>
+  </div>
 
-  <div id="msg"></div>
+  <div class="card">
+    <b>TensorFlow.js 狀態</b>
+    <div id="tfinfo"></div>
+  </div>
 
-  <div class="wrap">
-    <canvas id="canvas" width="400" height="400"></canvas>
+  <div class="card">
+    <b>已載入的 <code>&lt;script&gt;</code> 列表</b>
+    <div id="scripts" class="mono"></div>
+  </div>
 
-    <div class="panel">
-      <p class="title">即時辨識結果（固定八式順序）</p>
-      <div id="topClass">尚未開始</div>
-      <div id="bars"></div>
-    </div>
+  <div class="card">
+    <b>相機自檢</b><br>
+    <button id="btnCam">測試 getUserMedia</button>
+    <div id="cam" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <b>載入 tmPose 測試（按下才會載）</b><br>
+    <button id="btnTm">載入 tmPose 並測試 fromPixels</button>
+    <div id="tm" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <b>說明</b>
+    <ul>
+      <li>若「tfjs 版本」不是 <code>1.7.4</code> 或「fromPixels」顯示 <code>false</code>，代表被其它外掛/腳本覆蓋。</li>
+      <li>若按「載入 tmPose」後顯示錯誤文字，那就是 tmPose 與目前 TFJS 不相容（會把錯誤顯示出來）。</li>
+    </ul>
   </div>
 
 <script>
 (function(){
-  // === 依序顯示的八段錦八式（請改成與 metadata.json 裡 labels 完全一致）===
-  const EIGHT = [
-    '雙手托天理三焦',  // 1
-    '左右開弓似射雕',  // 2
-    '調理脾胃須單舉',  // 3
-    '五勞七傷往後瞧',  // 4
-    '搖頭擺尾去心火',  // 5
-    '兩手攀足固腎腰',  // 6
-    '攢拳怒目增氣力',  // 7
-    '背後七顛百病消'   // 8
-  ];
+  const $ = id => document.getElementById(id);
+  const envEl = $('env'), tfEl = $('tfinfo'), scEl = $('scripts'), camEl=$('cam'), tmEl=$('tm');
 
-  const verEl = document.getElementById('ver');
-  const msgEl = document.getElementById('msg');
-  const canvas = document.getElementById('canvas');
-  const ctx = canvas.getContext('2d');
+  // === 顯示環境 ===
+  const secure = window.isSecureContext;
+  envEl.innerHTML = `SecureContext：<b class="${secure?'ok':'bad'}">${secure}</b>（需為 HTTPS 或 localhost）`;
 
-  const modelURL    = './model.json';
-  const metadataURL = './metadata.json';
+  // === 顯示 TFJS 狀態 ===
+  function renderTF() {
+    const v = (window.tf && tf.version && tf.version.tfjs) || '未載';
+    const hasFP = (window.tf && typeof tf.fromPixels === 'function');
+    tfEl.innerHTML = `tfjs 版本：<b>${v}</b>　fromPixels：<b class="${hasFP?'ok':'bad'}">${hasFP}</b>`;
+  }
+  // 若沒有舊 API，就從 browser 版映射一次
+  (function ensureFromPixels(){
+    if (window.tf && typeof tf.fromPixels !== 'function' &&
+        tf.browser && typeof tf.browser.fromPixels === 'function') {
+      try { Object.defineProperty(tf,'fromPixels',{value:tf.browser.fromPixels.bind(tf.browser),writable:false,configurable:false}); }
+      catch(_) { tf.fromPixels = tf.browser.fromPixels.bind(tf.browser); }
+    }
+  })();
+  renderTF();
 
-  let model, webcam, maxPred=0, smooth = Object.fromEntries(EIGHT.map(n=>[n,0]));
+  // === 列出所有 script src ===
+  const list = Array.from(document.scripts).map(s=>s.src).filter(Boolean);
+  scEl.innerHTML = list.length ? ('<ul>'+list.map(x=>`<li>${x}</li>`).join('')+'</ul>') : '<i>（無外部 script）</i>';
 
-  verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | has fromPixels=${typeof tf.fromPixels==='function'}`;
-
-  function info(t, ok=false){ msgEl.style.color = ok?'#27ae60':'#c0392b'; msgEl.textContent = t; }
-
-  document.getElementById('btnCheck').onclick = async ()=>{
-    info('');
+  // === 相機自檢 ===
+  $('btnCam').onclick = async ()=>{
+    camEl.textContent = '測試中…';
     try{
-      if(!window.isSecureContext) throw new Error('此頁面不是 HTTPS 或 localhost，瀏覽器會封鎖相機');
-      const st = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
+      if(!secure) throw new Error('非 HTTPS/localhost，瀏覽器會封鎖相機');
+      const st = await navigator.mediaDevices.getUserMedia({video:true,audio:false});
       st.getTracks().forEach(t=>t.stop());
-      info('✅ 相機檢測成功，可以使用', true);
+      camEl.innerHTML = '<span class="ok">✅ 相機可用</span>';
     }catch(e){
-      info(`相機自檢失敗：${e.name}\n${e.message||''}\n• NotAllowedError：曾按拒絕或站點權限被關。\n• NotFoundError：沒有可用攝影機。\n• 請用 HTTPS / localhost 並允許相機。`);
+      camEl.innerHTML = `<span class="bad">❌ 相機錯誤：${e.name} — ${e.message||e}</span>`;
     }
   };
 
-  document.getElementById('btnStart').onclick = async ()=>{
+  // === 動態載入 tmPose 並測試 ===
+  $('btnTm').onclick = async ()=>{
+    tmEl.textContent = '載入中…';
     try{
+      await new Promise((res,rej)=>{
+        if (window.tmPose) return res();
+        const s=document.createElement('script');
+        s.src='https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js';
+        s.onload=()=>res();
+        s.onerror=()=>rej(new Error('teachablemachine-pose 載入失敗'));
+        document.head.appendChild(s);
+      });
+      // 這一步只測「tmPose 載入是否會因 fromPixels 故障」
       if (typeof tf.fromPixels !== 'function') {
-        throw new Error('tf.fromPixels 不可用（請以 Chrome「訪客模式」或停用擴充功能測試）');
+        throw new Error('tf.fromPixels 不存在（tmPose 需要 1.x 舊 API），代表仍被其它腳本覆蓋。');
       }
-
-      try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
-      await tf.ready();
-
-      // 檔案 OK 檢查
-      await fetch(modelURL,{cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`model.json HTTP ${r.status}`); });
-      await fetch(metadataURL,{cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`metadata.json HTTP ${r.status}`); });
-
-      model = await tmPose.load(modelURL, metadataURL);
-      maxPred = model.getTotalClasses();
-
-      // 建立 tmPose.Webcam（此時 tf.fromPixels 已鎖定）
-      webcam = new tmPose.Webcam(400, 400, true);
-      await webcam.setup();
-      await webcam.play();
-
-      // 畫布準備
-      const canvasEl = canvas;
-      canvasEl.width = 400; canvasEl.height = 400;
-
-      // 固定順序的分類條
-      buildBars(EIGHT);
-
-      info('✅ 模型載入完成，相機啟動成功！', true);
-      requestAnimationFrame(loop);
+      tmEl.innerHTML = '<span class="ok">✅ tmPose 載入成功，fromPixels 可用</span>';
     }catch(e){
-      info('❌ 無法載入：\n' + (e.message||e.toString()));
-      console.error(e);
+      tmEl.innerHTML = `<span class="bad">❌ tmPose 失敗：${e.message||e}</span>`;
     }
   };
-
-  function buildBars(names){
-    const bars = document.getElementById('bars');
-    bars.innerHTML='';
-    for(const n of names){
-      const id = cssId(n);
-      const row = document.createElement('div');
-      row.className='bar';
-      row.innerHTML = `
-        <div class="bar-name" title="${n}">${n}</div>
-        <div class="bar-track"><div class="bar-fill" id="fill-${id}" style="width:0%"></div></div>
-        <div class="bar-pct" id="pct-${id}">0.00%</div>`;
-      bars.appendChild(row);
-    }
-  }
-  const cssId = n => n.replace(/\s+/g,'-').replace(/[^-\w]/g,'');
-
-  async function loop(){
-    webcam.update();
-    await predict();
-    requestAnimationFrame(loop);
-  }
-
-  async function predict(){
-    const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
-    const preds = await model.predict(posenetOutput);
-
-    ctx.drawImage(webcam.canvas, 0, 0);
-    if (pose) {
-      tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
-      tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
-    }
-
-    // 將當前預測映射到固定順序
-    const map = Object.fromEntries(preds.map(p=>[p.className, p.probability]));
-    const alpha = 0.35;
-    let topName = EIGHT[0], topProb = 0;
-
-    for (const name of EIGHT){
-      const prob = map[name] ?? 0;
-      const val  = alpha*prob + (1-alpha)*(smooth[name]||0);
-      smooth[name] = val;
-
-      const pct = (val*100);
-      const id  = cssId(name);
-      const fill = document.getElementById(`fill-${id}`);
-      const txt  = document.getElementById(`pct-${id}`);
-      if (fill) fill.style.width = `${pct.toFixed(2)}%`;
-      if (txt)  txt.textContent  = `${pct.toFixed(2)}%`;
-
-      if (prob > topProb){ topProb = prob; topName = name; }
-    }
-    document.getElementById('topClass').textContent =
-      `目前辨識：${topName}（${(topProb*100).toFixed(2)}%）`;
-  }
 })();
 </script>
 </body>
