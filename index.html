@@ -1,90 +1,96 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦診斷版</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>八段錦極簡辨識</title>
 
-  <!-- 鎖定相容版本 + 加 bust 參數避免快取 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js?v=tf390"></script>
-  <script>
-    // 顯示所有 script，看看是否有第二個 tfjs
-    window.addEventListener('DOMContentLoaded', () => {
-      const list = Array.from(document.scripts).map(s => s.src).filter(Boolean);
-      console.log('Loaded scripts:', list);
-      document.getElementById('scripts').textContent = list.join('\n');
-    });
-    // 檢查 tfjs 版本 & fromPixels
-    window.addEventListener('load', () => {
-      const ver = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : '未載入';
-      const ok = !!(tf && tf.browser && typeof tf.browser.fromPixels === 'function');
-      document.getElementById('ver').textContent = `tfjs 版本：${ver}；fromPixels：${ok ? 'OK' : '缺失'}`;
-    });
-  </script>
+<!-- 固定相容版本（先 tfjs 再 tmPose），加參數避開快取 -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js?v=tf390"></script>
+<script>
+  // 顯示版本，並在意外被覆蓋時立即中止
+  const okFP = !!(window.tf && tf.browser && typeof tf.browser.fromPixels === "function");
+  if (!okFP) { throw new Error("tf.browser.fromPixels 不可用（版衝/快取）"); }
+  console.log("tfjs:", tf.version.tfjs);
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
 
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
-
-  <style>
-    body { font-family: Arial, sans-serif; background:#f5f7fa; padding:16px; text-align:center; }
-    #ver { color:#2c3e50; margin:8px 0; font-weight:600; }
-    #err { color:#c0392b; margin:8px 0; font-weight:700; }
-    pre { text-align:left; background:#fff; padding:10px; border:1px solid #ddd; max-width:900px; margin:12px auto; overflow:auto; }
-    canvas { border:2px solid #2c3e50; margin-top:14px; }
-    button { margin-top:12px; padding:10px 18px; background:#2980b9; color:#fff; border:none; border-radius:6px; cursor:pointer; }
-  </style>
+<style>
+body{font-family:Arial,Segoe UI,sans-serif;text-align:center;background:#f6f8fb;margin:0;padding:24px}
+h1{margin:8px 0 12px}
+#ver{color:#666;margin-bottom:8px}
+#err{color:#c0392b;font-weight:700;margin:8px 0}
+canvas{border:2px solid #2c3e50;border-radius:10px}
+#labels div{font-size:18px;margin-top:8px}
+button{margin:12px 0;padding:10px 20px;font-size:16px;background:#2980b9;color:#fff;border:0;border-radius:6px;cursor:pointer}
+</style>
 </head>
 <body>
-  <h1>八段錦極簡辨識（診斷版）</h1>
-  <div id="ver">檢查中…</div>
-  <div id="err"></div>
-  <button id="start">啟動辨識</button>
-  <br/>
-  <canvas id="canvas" width="400" height="400"></canvas>
-  <div id="labels"></div>
+<h1>八段錦極簡辨識</h1>
+<div id="ver"></div>
+<div id="err"></div>
+<button id="start">啟動辨識</button><br>
+<canvas id="c" width="400" height="400"></canvas>
+<div id="labels"></div>
 
-  <h3>本頁已載入的 script：</h3>
-  <pre id="scripts"></pre>
+<script>
+document.getElementById('ver').textContent =
+  "tfjs 版本：" + (tf?.version?.tfjs ?? "未載入") + "；fromPixels：" +
+  (typeof tf?.browser?.fromPixels === "function" ? "OK" : "缺失");
 
-  <script>
-    const MODEL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
-    let model, webcam, ctx, labels, maxPredictions;
+const MODEL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
+let model, webcam, ctx, labels, maxPred;
 
-    document.getElementById('start').onclick = init;
+document.getElementById('start').onclick = init;
 
-    function assertEnv() {
-      if (!window.tmPose) throw new Error('tmPose 未載入（請確認 0.8 UMD 並在 tfjs 之後載入）');
-      if (!tf.browser || typeof tf.browser.fromPixels !== 'function') {
-        throw new Error('tf.browser.fromPixels 不可用（表示 tfjs 版本被覆蓋或快取未清；請用無痕視窗/強制重整）');
-      }
-      if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-        console.warn('非 HTTPS/localhost：瀏覽器可能拒絕攝影機。');
-      }
-    }
+function assertEnv(){
+  if (!window.tmPose) throw new Error("tmPose 未載入（請確保用 0.8 的 UMD 檔，且在 tfjs 後載入）");
+  if (!(tf?.browser?.fromPixels)) throw new Error("tf.browser.fromPixels 不可用（代表 tfjs 被其他腳本覆蓋或快取未清）");
+  if (location.protocol !== "https:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+    console.warn("非 HTTPS/localhost，瀏覽器可能拒絕相機。");
+  }
+}
 
-    async function init() {
-      const $err = document.getElementById('err');
-      $err.textContent = '';
-      try {
-        assertEnv();
+async function init(){
+  const errEl = document.getElementById('err'); errEl.textContent = "";
+  try{
+    assertEnv();
 
-        const modelURL = MODEL + 'model.json';
-        const metadataURL = MODEL + 'metadata.json';
-        model = await tmPose.load(modelURL, metadataURL);
-        maxPredictions = model.getTotalClasses();
+    model = await tmPose.load(MODEL + "model.json", MODEL + "metadata.json");
+    maxPred = model.getTotalClasses();
 
-        const size = 400;
-        webcam = new tmPose.Webcam(size, size, true);
-        await webcam.setup();
-        await webcam.play();
-        requestAnimationFrame(loop);
+    webcam = new tmPose.Webcam(400, 400, true);
+    await webcam.setup();
+    await webcam.play();
+    requestAnimationFrame(loop);
 
-        const canvas = document.getElementById('canvas');
-        ctx = canvas.getContext('2d');
+    ctx = document.getElementById('c').getContext('2d');
 
-        labels = document.getElementById('labels');
-        labels.innerHTML = '';
-        for (let i = 0; i < maxPredictions; i++) {
-          labels.appendChild(Object.assign(document.createElement('div'), {id:'lab'+i}));
-        }
-      } catch (e) {
-        console.erro
+    labels = document.getElementById('labels'); labels.innerHTML = "";
+    for (let i = 0; i < maxPred; i++) labels.appendChild(document.createElement('div'));
+
+  }catch(e){
+    console.error(e); errEl.textContent = "⚠️ 無法啟動：" + e.message;
+  }
+}
+
+async function loop(){
+  webcam.update();
+  await predict();
+  requestAnimationFrame(loop);
+}
+
+async function predict(){
+  const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+  const pred = await model.predict(posenetOutput);
+
+  ctx.drawImage(webcam.canvas, 0, 0);
+  if (pose) { tmPose.drawKeypoints(pose.keypoints, 0.5, ctx); tmPose.drawSkeleton(pose.keypoints, 0.5, ctx); }
+
+  for (let i = 0; i < pred.length; i++) {
+    labels.childNodes[i].textContent = `${pred[i].className}: ${(pred[i].probability*100).toFixed(2)}%`;
+  }
+}
+</script>
+</body>
+</html>
