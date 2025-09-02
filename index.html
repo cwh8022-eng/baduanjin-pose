@@ -25,10 +25,10 @@
     @media (max-width:900px){.wrap{grid-template-columns:1fr}}
   </style>
 
-  <!-- 1) 固定載 TFJS 3.11.0 -->
+  <!-- TFJS -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
 
-  <!-- 2) shim 強化：確保 fromPixels 可用（tmPose 期望舊 API 名稱） -->
+  <!-- shim：確保 tmPose 可用 tf.fromPixels -->
   <script>
     (function(){
       if (!window.tf) return console.error('[shim] tf not found');
@@ -45,22 +45,19 @@
       } else {
         console.log('[shim] not needed. hasOld=', hasOld, 'hasNew=', hasNew);
       }
-      // 監控是否被覆寫
+      // 監控是否被覆寫並自動還原
       var orig = tf.fromPixels;
       setInterval(function(){
         if (typeof tf.fromPixels !== 'function' || tf.fromPixels !== orig) {
           console.warn('[shim] tf.fromPixels 被覆蓋，正在還原…');
-          try {
-            Object.defineProperty(tf, 'fromPixels', { value: orig, writable:false, configurable:false });
-          } catch(e) {
-            tf.fromPixels = orig;
-          }
+          try { Object.defineProperty(tf,'fromPixels',{value:orig,writable:false,configurable:false}); }
+          catch(e){ tf.fromPixels = orig; }
         }
       }, 500);
     })();
   </script>
 
-  <!-- 3) Teachable Machine Pose 0.8 -->
+  <!-- Teachable Machine Pose -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 </head>
 <body>
@@ -89,27 +86,23 @@
   const btnCheck = document.getElementById('btnCheck');
   const btnStart = document.getElementById('btnStart');
 
-  // 顯示環境與版本
   verEl.textContent =
     `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | has fromPixels=${typeof tf.fromPixels==='function'}`;
 
-  // 本地模型路徑（與 index.html 同資料夾）
+  // 與 index.html 同層的模型檔
   const modelURL    = './model.json';
   const metadataURL = './metadata.json';
 
   let model, webcam, ctx, maxPred = 0;
-  let classNames = [];           // 由第一次 predict 結果帶出
-  let barsBuilt = false;         // 是否已建立進度條
-  let smooth = {};               // 指數平滑緩衝 {className: value}
+  let classNames = [];
+  let barsBuilt = false;
+  let smooth = {};
 
-  // ① 相機自檢
+  // 相機自檢
   btnCheck.onclick = async () => {
-    msgEl.style.color = '#c0392b';
-    msgEl.textContent = '';
+    msgEl.style.color = '#c0392b'; msgEl.textContent = '';
     try{
-      if(!window.isSecureContext){
-        throw new Error('此頁面不是 HTTPS 或 localhost，瀏覽器會封鎖相機');
-      }
+      if(!window.isSecureContext) throw new Error('此頁面不是 HTTPS 或 localhost，瀏覽器會封鎖相機');
       const stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
       stream.getTracks().forEach(t=>t.stop());
       msgEl.style.color = '#27ae60';
@@ -122,10 +115,9 @@
     }
   };
 
-  // ② 載入模型並開始
+  // 載入模型並開始
   btnStart.onclick = async () => {
-    msgEl.style.color = '#c0392b';
-    msgEl.textContent = '載入中…';
+    msgEl.style.color = '#c0392b'; msgEl.textContent = '載入中…';
     try{
       if (typeof tf.fromPixels !== 'function') {
         throw new Error('tf.fromPixels 不可用（請用訪客模式測試，避免外掛覆蓋 TFJS）');
@@ -140,11 +132,12 @@
       const canvas = document.getElementById('canvas');
       ctx = canvas.getContext('2d');
 
-      // 啟用 Webcam
+      // ★ 修正點：建立後指回全域 webcam 變數
       const tmCam = new tmPose.Webcam(size, size, flip);
-      window.webcam = tmCam; // 若需除錯方便
       await tmCam.setup();
       await tmCam.play();
+      webcam = tmCam;           // <= 這行是關鍵
+      window.webcam = webcam;   // 方便除錯觀看
 
       msgEl.style.color = '#27ae60';
       msgEl.textContent = '✅ 模型載入完成，相機啟動成功！';
@@ -169,7 +162,7 @@
         <div class="bar-pct" id="pct-${cssId(n)}">0.00%</div>
       `;
       bars.appendChild(row);
-      smooth[n] = 0; // init smoothing
+      smooth[n] = 0;
     });
     barsBuilt = true;
   }
@@ -177,6 +170,8 @@
   function cssId(name){ return name.replace(/\s+/g,'-').replace(/[^-\w]/g,''); }
 
   async function loop(){
+    // 防呆：webcam 尚未準備就先跳出
+    if (!webcam) { requestAnimationFrame(loop); return; }
     webcam.update();
     await predict();
     requestAnimationFrame(loop);
@@ -186,24 +181,20 @@
     const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
     const preds = await model.predict(posenetOutput);
 
-    // 初始化分類條（一次）
     if (!barsBuilt) {
       classNames = preds.map(p=>p.className);
       buildBars(classNames);
     }
 
-    // 畫影像與骨架
     ctx.drawImage(webcam.canvas, 0, 0);
     if (pose) {
       tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
       tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
     }
 
-    // 取最大類別，並更新分類條（含指數平滑）
     let top = {className:'', probability:0};
-    const alpha = 0.35; // 平滑係數：越大越靈敏
+    const alpha = 0.35;
     preds.forEach(p=>{
-      // 指數平滑
       const prev = smooth[p.className] ?? 0;
       const val = alpha * p.probability + (1 - alpha) * prev;
       smooth[p.className] = val;
