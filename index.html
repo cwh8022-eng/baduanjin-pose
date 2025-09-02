@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>八段錦辨識（單檔隔離版）</title>
+  <title>八段錦辨識（嚴格隔離版）</title>
 
-  <!-- 可選：收緊 CSP，避免外部 TFJS 混入（若外掛仍可繞過，請用訪客模式） -->
+  <!-- 可選：CSP 只允許 jsDelivr，避免外層再載入別的 TFJS（外掛可能繞過，故還是靠 iframe 隔離） -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self';
                  script-src 'self' https://cdn.jsdelivr.net;
@@ -20,35 +20,35 @@
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Arial,Helvetica,sans-serif;
          background:#f6f8fb;margin:0;padding:24px;text-align:center}
     h1{margin:6px 0 10px}
-    #err{color:#c0392b;font-weight:700;margin:8px 0}
     #wrap{max-width:980px;margin:0 auto}
+    #err{color:#c0392b;font-weight:700;margin:8px 0}
     iframe{width:100%;height:720px;border:2px solid #2c3e50;border-radius:12px;background:#fff}
     .tips{color:#666;font-size:13px;margin-top:8px}
   </style>
 </head>
 <body>
 <div id="wrap">
-  <h1>八段錦動作辨識（隔離執行，避免 TFJS 衝突）</h1>
+  <h1>八段錦動作辨識（沙箱隔離，避免 TFJS 衝突）</h1>
   <div id="err"></div>
 
-  <!-- 允許相機；沙箱隔離外層腳本；同源可讓內部下載模型 -->
+  <!-- 關鍵：sandbox 內不給 allow-same-origin，徹底隔離外層；允許 camera -->
   <iframe id="runner"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-modals"
+          sandbox="allow-scripts allow-forms allow-pointer-lock allow-modals"
           allow="camera *; microphone *"
           referrerpolicy="no-referrer"></iframe>
 
   <p class="tips">
-    使用說明：請在 <b>HTTPS</b> 或 <b>localhost</b> 環境開啟，按「啟動辨識」並允許相機。
-    若瀏覽器外掛仍干擾，請用 <b>訪客模式</b> 或 <b>無痕視窗（外掛勿允許在無痕執行）</b>。
+    使用：請在 <b>HTTPS</b> 或 <b>localhost</b> 開啟；按「啟動辨識」並允許相機。<br>
+    若仍被瀏覽器外掛干擾，請用 <b>訪客模式</b> 或全新使用者（比無痕更乾淨）。
   </p>
 </div>
 
 <script>
-  // 這裡可改你的 Teachable Machine 模型 ID
-  const TM_MODEL_ID = "jX4OKw-11"; // ← 改成你的 model ID 即可
+  // 你的 Teachable Machine 模型 ID（可自行替換）
+  const TM_MODEL_ID = "jX4OKw-11";
   const MODEL_URL = `https://teachablemachine.withgoogle.com/models/${TM_MODEL_ID}/`;
 
-  // 內嵌到 iframe 的「隔離」頁面：固定 tfjs@1.7.4 + tmPose@0.8
+  // 內嵌到 iframe 的沙箱頁面（和外層不同源）：固定 tfjs@1.7.4 + tmPose@0.8
   const srcdoc = `<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -63,6 +63,7 @@
   canvas{border:2px solid #2c3e50;border-radius:10px}
   #labels div{font-size:16px;margin-top:6px}
   button{margin:10px 0 14px;padding:10px 18px;font-size:16px;background:#2980b9;color:#fff;border:0;border-radius:6px;cursor:pointer}
+  pre{max-width:900px;margin:10px auto;text-align:left;background:#f7f7f7;border:1px solid #ddd;padding:8px;overflow:auto}
 </style>
 </head>
 <body>
@@ -73,9 +74,8 @@
   <canvas id="c" width="400" height="400"></canvas>
   <div id="labels"></div>
 
-  <!-- 固定相容版本：tfjs 1.7.4（內建 tf.fromPixels） -->
+  <!-- 只在沙箱內載入相容版本 -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
-  <!-- Teachable Machine Pose 0.8（UMD） -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
   <script>
@@ -83,10 +83,11 @@
     const MODEL = "${MODEL_URL}";
     let model, webcam, ctx, labels, maxPred;
 
-    // 顯示 TF 版本與 fromPixels 狀態
+    // 顯示版本與 fromPixels 狀態（1.7.4 應為 function）
     (function(){
       const v = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : "未載入";
-      document.getElementById('ver').textContent = 'tfjs 版本：' + v + '；tf.fromPixels = ' + (typeof tf.fromPixels);
+      const has = (typeof tf.fromPixels === "function");
+      document.getElementById('ver').textContent = 'tfjs 版本：' + v + '；tf.fromPixels = ' + has;
     })();
 
     document.getElementById('start').onclick = init;
@@ -94,7 +95,7 @@
     async function init(){
       const errEl = document.getElementById('err'); errEl.textContent = '';
       try{
-        // 1) backend 準備（1.x 支援）
+        // 1) backend
         try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
         await tf.ready();
         console.log('backend =', tf.getBackend(), 'tf.fromPixels =', typeof tf.fromPixels);
@@ -102,14 +103,14 @@
           throw new Error('tf.fromPixels 不可用（沙箱內不應發生）。');
         }
 
-        // 2) 載入 TM 模型
+        // 2) 載入模型
         model = await tmPose.load(MODEL + 'model.json', MODEL + 'metadata.json');
         maxPred = model.getTotalClasses();
 
-        // 3) 啟用相機（需 HTTPS / localhost）
+        // 3) 啟用相機
         const size = 400;
         webcam = new tmPose.Webcam(size, size, true);
-        await webcam.setup();            // 用戶允許相機
+        await webcam.setup();
         await webcam.play();
         requestAnimationFrame(loop);
 
@@ -122,7 +123,7 @@
       }catch(e){
         console.error(e);
         errEl.textContent = '⚠️ 無法啟動：' + e.message +
-          '（請確認 HTTPS/localhost 並允許相機；如仍異常，改用訪客/無痕視窗）';
+          '（請確認 HTTPS/localhost 並允許相機）';
       }
     }
 
