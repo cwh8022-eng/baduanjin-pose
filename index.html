@@ -1,18 +1,20 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
   <title>八段錦動作辨識系統</title>
 
-  <!-- ✅ 必須先載入 TensorFlow.js -->
+  <!-- 必須先載入 TensorFlow.js -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4"></script>
 
-  <!-- ✅ 再載入 Teachable Machine Pose -->
+  <!-- 再載入 Teachable Machine Pose 模組 -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
   <style>
     body {
       font-family: 'Noto Sans TC', sans-serif;
-      text-align: center;
       background-color: #f0f4f8;
+      text-align: center;
       padding: 40px;
     }
     h1 {
@@ -27,8 +29,8 @@
       border: 2px solid #2c3e50;
     }
     #label-container div {
-      margin-top: 10px;
       font-size: 20px;
+      margin-top: 10px;
       color: #16a085;
     }
     button {
@@ -51,3 +53,60 @@
     }
   </style>
 </head>
+<body>
+  <h1>八段錦動作辨識系統</h1>
+  <p>請開啟攝影機並執行八段錦動作，本系統將即時辨識姿勢正確與否。</p>
+  <button onclick="init()">開始辨識</button>
+  <div id="webcam-container"></div>
+  <div id="label-container"></div>
+  <div id="error-message"></div>
+
+  <script type="text/javascript">
+    let model, webcam, labelContainer, maxPredictions;
+
+    async function init() {
+      const URL = "./";
+      const modelURL = URL + "model.json";
+      const metadataURL = URL + "metadata.json";
+
+      try {
+        model = await tmPose.load(modelURL, metadataURL);
+        maxPredictions = model.getTotalClasses();
+
+        const size = 400;
+        const flip = true;
+        webcam = new tmPose.Webcam(size, size, flip);
+        await webcam.setup();
+        await webcam.play();
+        window.requestAnimationFrame(loop);
+
+        document.getElementById("webcam-container").appendChild(webcam.canvas);
+        labelContainer = document.getElementById("label-container");
+        for (let i = 0; i < maxPredictions; i++) {
+          labelContainer.appendChild(document.createElement("div"));
+        }
+      } catch (error) {
+        console.error("Camera error:", error);
+        document.getElementById("error-message").innerText =
+          "⚠️ 錯誤：無法開啟攝影機。請確認權限、使用 Chrome/Edge，並於 HTTPS 或 localhost 環境中執行。";
+      }
+    }
+
+    async function loop() {
+      webcam.update();
+      await predict();
+      window.requestAnimationFrame(loop);
+    }
+
+    async function predict() {
+      const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+      const prediction = await model.predict(posenetOutput);
+
+      for (let i = 0; i < maxPredictions; i++) {
+        const classPrediction = `${prediction[i].className}: ${(prediction[i].probability * 100).toFixed(2)}%`;
+        labelContainer.childNodes[i].innerHTML = classPrediction;
+      }
+    }
+  </script>
+</body>
+</html>
