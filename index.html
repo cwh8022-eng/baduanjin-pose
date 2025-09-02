@@ -25,9 +25,9 @@
     video{position:absolute;left:-9999px;top:-9999px;width:0;height:0} /* 影像來源隱藏 */
   </style>
 
-  <!-- 用較新的 TFJS（不依賴 tmPose），我們自行組 14739 特徵 -->
+  <!-- 使用 TFJS 3.11（我們不載 tmPose）-->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
-  <!-- PoseNet 模型 -->
+  <!-- 使用 PoseNet 抓原始輸出（heatmapScores / offsets）-->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet@2.2.1/dist/posenet.min.js"></script>
 </head>
 <body>
@@ -54,7 +54,7 @@
 
 <script>
 (function(){
-  // === 依序顯示的八段錦八式（請改成與 metadata.json 裡 labels 完全一致）===
+  // === 固定顯示順序（請改成與 metadata.json 的 labels 完全一致的字串）===
   const EIGHT = [
     '雙手托天理三焦',  // 1
     '左右開弓似射雕',  // 2
@@ -108,10 +108,10 @@
       labels = meta.labels || meta.classes || [];
       if (labels.length === 0) throw new Error('metadata.json 缺少 labels');
 
-      // 載入分類器（你的本地 model.json）
+      // 載入你的本地分類器
       classifier = await tf.loadLayersModel(modelURL);
 
-      // 載入 PoseNet（**關鍵：inputResolution 257、outputStride 16**）
+      // 載入 PoseNet（關鍵：inputResolution=257, outputStride=16）
       posenetModel = await posenet.load({
         architecture: 'MobileNetV1',
         outputStride: 16,
@@ -159,22 +159,20 @@
     requestAnimationFrame(loop);
   }
 
-  // 產生 TM Pose 所需的 14739 特徵（heatmap 17*17*17 + offsets 17*17*34）
+  // 產生 TM Pose 分類器所需的 14739 特徵：heatmap(17*17*17) + offsets(17*17*34)
   function makeFeatures14739(heatmap, offsets){
-    // heatmap shape: [1,17,17,17]、offsets shape: [1,17,17,34]
-    const h = heatmap.reshape([17*17*17]);
-    const o = offsets.reshape([17*17*34]);
-    const concat = tf.concat([h, o]);             // [14739]
-    const out = concat.reshape([1, 14739]);       // [1,14739]
+    const h = heatmap.reshape([17*17*17]);   // 4913
+    const o = offsets.reshape([17*17*34]);   // 9826
+    const concat = tf.concat([h, o]);        // 14739
+    const out = concat.reshape([1, 14739]);  // [1,14739]
     h.dispose(); o.dispose(); concat.dispose();
     return out;
   }
 
-  // 直接用 PoseNet 的 baseModel.predict 取出 heatmap & offsets
-  function posenetPredictRaw(imgTensor){
-    // imgTensor: [1,257,257,3] 已正規化到 [-1,1]
-    // @tensorflow-models/posenet 的 baseModel.predict 會回傳字典：{heatmapScores, offsets, displacementFwd, displacementBwd}
-    return posenetModel.baseModel.predict(imgTensor);
+  // 直接用 PoseNet baseModel 取 raw outputs（注意：輸入要 3D [257,257,3]，不要 expandDims）
+  function posenetPredictRaw(img3d){
+    // img3d: [257,257,3]、正規化到 [-1,1]
+    return posenetModel.baseModel.predict(img3d);
   }
 
   async function predictOnce(){
@@ -187,39 +185,33 @@
       ctx.drawImage(video,0,0,canvas.width,canvas.height);
     }
 
-    // === A) 先用官方 API 估姿勢（拿關鍵點畫線用） ===
+    // A) 用官方 API 估姿勢（只用來畫關鍵點/骨架）
     const pose = await posenetModel.estimateSinglePose(video, { flipHorizontal: flip });
     drawKeypoints(pose.keypoints, 0.5, ctx);
     drawSkeleton(pose.keypoints, 0.5, ctx);
 
-    // === B) 自己做一次 forward，拿 heatmap & offsets ===
+    // B) 自行 forward 取 heatmap/offsets → 組 14739 特徵
     const feat = tf.tidy(()=>{
-      // 1) 取得 [1,257,257,3]，并正規化到 [-1,1]
-      let t = tf.browser.fromPixels(video);
-      t = tf.image.resizeBilinear(t, [257,257]).toFloat();
-      t = t.div(127.5).sub(1).expandDims(0);             // [1,257,257,3]
+      // 取得 [257,257,3]（❗不要 expandDims），並正規化到 [-1,1]
+      let t = tf.browser.fromPixels(video);                // [H,W,3]
+      t = tf.image.resizeBilinear(t, [257,257]).toFloat(); // [257,257,3]
+      t = t.div(127.5).sub(1);                             // [-1,1]，仍是 [257,257,3]
 
-      // 2) 取 raw outputs
-      const out = posenetPredictRaw(t);
-      const heatmap = out.heatmapScores; // [1,17,17,17]
-      const offsets = out.offsets;       // [1,17,17,34]
+      const out = posenetPredictRaw(t);                    // baseModel 內部會自動加 batch
+      const heatmap = out.heatmapScores;                   // [1,17,17,17]
+      const offsets = out.offsets;                         // [1,17,17,34]
 
-      // 3) 組成 14739 特徵
-      const f = makeFeatures14739(heatmap, offsets);
-
-      // 清理：原圖 tensor 釋放（heatmap/offsets 在 makeFeatures 內已處理）
+      const f = makeFeatures14739(heatmap, offsets);       // [1,14739]
       t.dispose();
-      // out 裡其餘的 displacementFwd/Back 自動回收（沒存出來）
-
-      return f; // [1,14739]
+      return f;
     });
 
-    // === C) 丟進你的分類器 ===
-    const pred = classifier.predict(feat);        // [1,numClasses]
+    // C) 丟入你的分類器
+    const pred = classifier.predict(feat);                 // [1, numClasses]
     const probs = Array.from(await pred.data());
     pred.dispose(); feat.dispose();
 
-    // === D) 對齊 metadata 的 labels → 映射到固定 EIGHT 順序 ===
+    // D) 對齊 metadata 的 labels → 映射到固定 EIGHT 順序並更新 UI
     const map = {};
     labels.forEach((name,i)=> map[name] = probs[i] || 0);
 
@@ -242,7 +234,7 @@
     $('topClass').textContent = `目前辨識：${topName}（${(topProb*100).toFixed(2)}%）`;
   }
 
-  /* ====== 簡易繪製工具（仿 tmPose 畫法） ====== */
+  /* ====== 簡易繪製工具 ====== */
   function toTuple({y, x}) { return [x, y]; }
   function drawKeypoints(keypoints, minConfidence, ctx) {
     keypoints.forEach(kp=>{
