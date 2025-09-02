@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦辨識（分類條・強化防覆寫版）</title>
+  <title>八段錦辨識（動態載入・防覆蓋版）</title>
   <style>
     :root{color-scheme:light dark}
     body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;margin:0;padding:20px;text-align:center}
@@ -25,65 +25,70 @@
     @media (max-width:900px){.wrap{grid-template-columns:1fr}}
   </style>
 
-  <!-- 1) 先載 tfjs 1.7.4（含 fromPixels） -->
+  <!-- 1) 先載 tfjs 1.7.4（含 fromPixels）-->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
 
-  <!-- 2) 監控/攔截任何對 window.tf 的覆寫，並自動修補 fromPixels -->
+  <!-- 2) 修補＋監控 + 動態載入 tmPose -->
   <script>
-    (function guardTF(){
-      // 工具：把 fromPixels 修好（支援新舊 API）
-      function ensureFromPixels(tf) {
-        if (!tf) return;
-        var hasOld = typeof tf.fromPixels === 'function';
-        var hasNew = tf.browser && typeof tf.browser.fromPixels === 'function';
-        if (!hasOld && hasNew) {
-          try {
-            Object.defineProperty(tf, 'fromPixels', {
-              value: tf.browser.fromPixels.bind(tf.browser),
-              writable: false, configurable: false
-            });
-          } catch (_) { tf.fromPixels = tf.browser.fromPixels.bind(tf.browser); }
-          console.log('[guard] patched tf.fromPixels from tf.browser.fromPixels');
-        }
-        return typeof tf.fromPixels === 'function';
+    // 讓訊息好看一點
+    function setVer() {
+      const el = document.getElementById('ver');
+      const v = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : '未載';
+      const ok = (window.tf && typeof tf.fromPixels === 'function');
+      el.textContent = `SecureContext=${window.isSecureContext} | tfjs=${v} | has fromPixels=${ok}`;
+    }
+    function info(msg, ok=false){ const el = document.getElementById('msg'); el.style.color = ok?'#27ae60':'#c0392b'; el.textContent = msg; }
+
+    // 將 tf.browser.fromPixels 映射為 tf.fromPixels（若缺）
+    function ensureFromPixels(tfobj){
+      if(!tfobj) return false;
+      const hasOld = typeof tfobj.fromPixels === 'function';
+      const hasNew = tfobj.browser && typeof tfobj.browser.fromPixels === 'function';
+      if(!hasOld && hasNew){
+        try{ Object.defineProperty(tfobj,'fromPixels',{value:tfobj.browser.fromPixels.bind(tfobj.browser),writable:false,configurable:false}); }
+        catch(_){ tfobj.fromPixels = tfobj.browser.fromPixels.bind(tfobj.browser); }
+        console.log('[fix] installed tf.fromPixels from tf.browser.fromPixels');
       }
+      return typeof tfobj.fromPixels === 'function';
+    }
 
-      // 1) 先對目前的 tf 做一次修補
+    // 攔截任何對 window.tf 的覆寫，立即修補
+    (function guardTF(){
       ensureFromPixels(window.tf);
-
-      // 2) 攔截「之後」任何對 window.tf 的覆寫
-      var _tf = window.tf;
-      try {
-        Object.defineProperty(window, 'tf', {
-          configurable: true,
-          get() { return _tf; },
-          set(v) {
-            _tf = v;
-            var ok = ensureFromPixels(_tf);
-            console.warn('[guard] window.tf was replaced, fromPixels ok =', ok);
-          }
+      let _tf = window.tf;
+      try{
+        Object.defineProperty(window,'tf',{
+          configurable:true,
+          get(){ return _tf; },
+          set(v){ _tf=v; const ok=ensureFromPixels(_tf); console.warn('[guard] window.tf replaced. fromPixels ok =',ok); setVer(); }
         });
         console.log('[guard] window.tf setter installed');
-      } catch (e) {
-        console.warn('[guard] cannot install setter, fallback to watcher', e);
-        // 3) 若環境不允許 setter，就用輪詢監控
-        var last = window.tf;
-        setInterval(function(){
-          if (window.tf !== last) {
-            last = window.tf;
-            var ok = ensureFromPixels(last);
-            console.warn('[guard] window.tf changed, fromPixels ok =', ok);
-          }
-        }, 400);
+      }catch(e){
+        console.warn('[guard] setter not allowed, fallback to watcher', e);
+        let last = window.tf;
+        setInterval(()=>{ if(window.tf !== last){ last=window.tf; const ok=ensureFromPixels(last); console.warn('[guard] window.tf changed. fromPixels ok =',ok); setVer(); }}, 300);
       }
     })();
-  </script>
 
-  <!-- 3) 再載 Teachable Machine Pose（必須在 guard 之後） -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+    // 動態插入 tmPose（只有在確認 fromPixels 可用時才載）
+    function loadTmPoseOnce(){
+      return new Promise((resolve, reject)=>{
+        if(!window.tf || typeof tf.fromPixels!=='function'){ return reject(new Error('tf.fromPixels 不可用')); }
+        if(window.tmPose){ return resolve(); }
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js';
+        s.onload = ()=>{ console.log('[load] tmPose loaded'); resolve(); };
+        s.onerror = ()=> reject(new Error('無法載入 teachablemachine-pose'));
+        document.head.appendChild(s);
+      });
+    }
+
+    // 讓頁面初始就顯示目前狀態
+    document.addEventListener('DOMContentLoaded', setVer);
+  </script>
 </head>
 <body>
-  <h1>八段錦動作辨識（分類條）</h1>
+  <h1>八段錦動作辨識（動態載入・防覆蓋版）</h1>
   <div id="ver">初始化中…</div>
 
   <button id="btnCheck" class="btn">① 相機自檢</button>
@@ -103,71 +108,58 @@
 
 <script>
 (function(){
-  const verEl = document.getElementById('ver');
-  const msgEl = document.getElementById('msg');
   const btnCheck = document.getElementById('btnCheck');
   const btnStart = document.getElementById('btnStart');
-
-  const tfv = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : '未載';
-  const hasFP = (typeof (window.tf && tf.fromPixels) === 'function');
-  verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${tfv} | has fromPixels=${hasFP}`;
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
 
   const modelURL    = './model.json';
   const metadataURL = './metadata.json';
 
-  let model, webcam, ctx, maxPred = 0;
-  let classNames = [];
-  let barsBuilt = false;
-  let smooth = {};
+  let model, webcam, maxPred=0, barsBuilt=false, smooth={}, classNames=[];
 
   btnCheck.onclick = async () => {
-    msgEl.style.color = '#c0392b'; msgEl.textContent = '';
+    info('');
     try{
       if(!window.isSecureContext) throw new Error('此頁面不是 HTTPS 或 localhost，瀏覽器會封鎖相機');
-      const stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
-      stream.getTracks().forEach(t=>t.stop());
-      msgEl.style.color = '#27ae60';
-      msgEl.textContent = '✅ 相機檢測成功，可以使用';
+      const st = await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+      st.getTracks().forEach(t=>t.stop());
+      info('✅ 相機檢測成功，可以使用', true);
     }catch(e){
-      msgEl.textContent = `相機自檢失敗：${e.name}\n${e.message||''}\n` +
-                          '• NotAllowedError：曾按拒絕或站點權限被關。\n' +
-                          '• NotFoundError：沒有可用攝影機。\n' +
-                          '• 請用 HTTPS / localhost 並允許相機。';
+      info(`相機自檢失敗：${e.name}\n${e.message||''}\n• NotAllowedError：曾按拒絕或站點權限被關。\n• NotFoundError：沒有可用攝影機。\n• 請用 HTTPS / localhost 並允許相機。`);
     }
   };
 
   btnStart.onclick = async () => {
-    msgEl.style.color = '#c0392b'; msgEl.textContent = '載入中…';
     try{
-      if (typeof tf.fromPixels !== 'function') {
-        throw new Error('tf.fromPixels 不可用：當前頁面的 TFJS 被外掛或其它腳本覆蓋。若仍無法運行，請用 Chrome「訪客模式」開啟此頁。');
-      }
+      // 1) 確認/修補 fromPixels
+      if(!ensureFromPixels(window.tf)) throw new Error('tf.fromPixels 不可用（被外掛或其它腳本覆蓋）。');
+      setVer();
 
+      // 2) 只有在 OK 才載 tmPose
+      await loadTmPoseOnce();
+
+      // 3) backend 準備
       try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
       await tf.ready();
 
-      await mustOk(modelURL, 'model.json');
-      await mustOk(metadataURL, 'metadata.json');
+      // 4) 檔案存在檢查
+      await fetch(modelURL, {cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`model.json HTTP ${r.status}`);});
+      await fetch(metadataURL, {cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`metadata.json HTTP ${r.status}`);});
 
+      // 5) 載入模型
       model = await tmPose.load(modelURL, metadataURL);
       maxPred = model.getTotalClasses();
 
-      const size = 400, flip = true;
-      const canvas = document.getElementById('canvas');
-      ctx = canvas.getContext('2d');
+      // 6) 啟用相機
+      webcam = new tmPose.Webcam(400, 400, true);
+      await webcam.setup();
+      await webcam.play();
 
-      const cam = new tmPose.Webcam(size, size, flip);
-      await cam.setup();
-      await cam.play();
-      window.webcam = cam;
-
-      msgEl.style.color = '#27ae60';
-      msgEl.textContent = '✅ 模型載入完成，相機啟動成功！';
+      info('✅ 模型載入完成，相機啟動成功！', true);
       requestAnimationFrame(loop);
-
     }catch(e){
-      msgEl.style.color = '#c0392b';
-      msgEl.textContent = '❌ 無法載入模型或啟動相機：\n' + (e.message||e.toString());
+      info('❌ 無法載入：\n' + (e.message||e.toString()));
       console.error(e);
     }
   };
@@ -176,69 +168,59 @@
     const bars = document.getElementById('bars');
     bars.innerHTML = '';
     names.forEach(n=>{
+      const id = cssId(n);
       const row = document.createElement('div');
       row.className = 'bar';
       row.innerHTML = `
         <div class="bar-name" title="${n}">${n}</div>
-        <div class="bar-track"><div class="bar-fill" id="fill-${cssId(n)}" style="width:0%"></div></div>
-        <div class="bar-pct" id="pct-${cssId(n)}">0.00%</div>
-      `;
+        <div class="bar-track"><div class="bar-fill" id="fill-${id}" style="width:0%"></div></div>
+        <div class="bar-pct" id="pct-${id}">0.00%</div>`;
       bars.appendChild(row);
-      smooth[n] = 0;
+      smooth[n]=0;
     });
-    barsBuilt = true;
+    barsBuilt=true;
   }
-
-  function cssId(name){ return name.replace(/\s+/g,'-').replace(/[^-\w]/g,''); }
+  function cssId(n){ return n.replace(/\s+/g,'-').replace(/[^-\w]/g,''); }
 
   async function loop(){
-    if (!window.webcam) { requestAnimationFrame(loop); return; }
-    window.webcam.update();
+    if(!webcam){ requestAnimationFrame(loop); return; }
+    webcam.update();
     await predict();
     requestAnimationFrame(loop);
   }
 
   async function predict(){
-    const { pose, posenetOutput } = await model.estimatePose(window.webcam.canvas);
+    const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
     const preds = await model.predict(posenetOutput);
 
-    if (!barsBuilt) {
-      classNames = preds.map(p=>p.className);
-      buildBars(classNames);
-    }
+    if(!barsBuilt){ classNames = preds.map(p=>p.className); buildBars(classNames); }
 
-    ctx.drawImage(window.webcam.canvas, 0, 0);
-    if (pose) {
-      tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
-      tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
-    }
+    ctx.drawImage(webcam.canvas, 0, 0);
+    if(pose){ tmPose.drawKeypoints(pose.keypoints, 0.5, ctx); tmPose.drawSkeleton(pose.keypoints, 0.5, ctx); }
 
-    let top = {className:'', probability:0};
-    const alpha = 0.35;
+    let top={className:'',probability:0};
+    const alpha=0.35;
     preds.forEach(p=>{
-      const prev = smooth[p.className] ?? 0;
-      const val = alpha * p.probability + (1 - alpha) * prev;
-      smooth[p.className] = val;
+      const prev = smooth[p.className]??0;
+      const val = alpha*p.probability + (1-alpha)*prev;
+      smooth[p.className]=val;
 
-      const pct = (val * 100);
+      const pct = val*100;
       const id = cssId(p.className);
-      const fill = document.getElementById(`fill-${id}`);
-      const label = document.getElementById(`pct-${id}`);
-      if (fill) fill.style.width = `${pct.toFixed(2)}%`;
-      if (label) label.textContent = `${pct.toFixed(2)}%`;
+      const f = document.getElementById(`fill-${id}`);
+      const t = document.getElementById(`pct-${id}`);
+      if(f) f.style.width = `${pct.toFixed(2)}%`;
+      if(t) t.textContent = `${pct.toFixed(2)}%`;
 
-      if (p.probability > top.probability) top = p;
+      if(p.probability>top.probability) top=p;
     });
-
-    const topEl = document.getElementById('topClass');
-    topEl.textContent = `目前辨識：${top.className}（${(top.probability*100).toFixed(2)}%）`;
+    document.getElementById('topClass').textContent =
+      `目前辨識：${top.className}（${(top.probability*100).toFixed(2)}%）`;
   }
 
-  async function mustOk(url, name){
-    const r = await fetch(url, { cache:'no-store' });
-    if(!r.ok) throw new Error(`${name} HTTP ${r.status}（找不到或被阻擋）`);
-    return r;
-  }
+  // 這兩個工具函式要讓內層也能用
+  window.ensureFromPixels = ensureFromPixels;
+  window.setVer = setVer;
 })();
 </script>
 </body>
