@@ -1,15 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識</title>
-
-  <!-- ✅ 正確的 tfjs v3.21.0 -->
+  <meta charset="UTF-8">
+  <title>Baduanjin Pose Detection</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
-  <!-- ✅ 正確的 TeachableMachine Pose v0.8 -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
-
   <style>
     body {
       font-family: 'Arial', sans-serif;
@@ -43,41 +38,48 @@
   </style>
 </head>
 <body>
-  <h1>八段錦動作辨識</h1>
-  <button onclick="init()">啟動辨識</button>
-  <div id="webcam-container"></div>
+  <h1>Baduanjin Pose Detection</h1>
+  <button type="button" onclick="init()">Start</button>
   <div id="label-container"></div>
+  <div><canvas id="canvas"></canvas></div>
 
-  <script type="text/javascript">
-    const URL = "./"; // 請確認 model.json、metadata.json、weights.bin 同層
+  <script>
+    console.log("✅ TensorFlow.js version:", tf.version.tfjs); // 顯示 tfjs 版本
+
+    const URL = "./"; // 模型放在同一資料夾下
+
     let model, webcam, ctx, labelContainer, maxPredictions;
 
     async function init() {
       const modelURL = URL + "model.json";
       const metadataURL = URL + "metadata.json";
 
-      // 載入模型
       model = await tmPose.load(modelURL, metadataURL);
       maxPredictions = model.getTotalClasses();
 
-      // 設定 webcam
       const size = 400;
-      const flip = true; // 鏡像
+      const flip = true;
+
       webcam = new tmPose.Webcam(size, size, flip);
-      await webcam.setup(); // 啟動鏡頭
-      await webcam.play();  // 播放鏡頭影像
+      await webcam.setup();
+      await webcam.play();
+
       window.requestAnimationFrame(loop);
 
-      // 建立 DOM
-      document.getElementById("webcam-container").appendChild(webcam.canvas);
+      const canvas = document.getElementById("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      ctx = canvas.getContext("2d");
+
       labelContainer = document.getElementById("label-container");
+      labelContainer.innerHTML = "";
       for (let i = 0; i < maxPredictions; i++) {
         labelContainer.appendChild(document.createElement("div"));
       }
     }
 
     async function loop(timestamp) {
-      webcam.update(); // 更新鏡頭畫面
+      webcam.update();
       await predict();
       window.requestAnimationFrame(loop);
     }
@@ -85,9 +87,30 @@
     async function predict() {
       const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
       const prediction = await model.predict(posenetOutput);
+
       for (let i = 0; i < maxPredictions; i++) {
-        const classPrediction = prediction[i].className + ": " + (prediction[i].probability * 100).toFixed(2) + "%";
+        const classPrediction =
+          prediction[i].className + ": " + (prediction[i].probability * 100).toFixed(2) + "%";
         labelContainer.childNodes[i].innerHTML = classPrediction;
+      }
+
+      drawPose(pose);
+    }
+
+    function drawPose(pose) {
+      if (webcam.canvas) {
+        ctx.drawImage(webcam.canvas, 0, 0);
+        if (pose) {
+          for (let i = 0; i < pose.keypoints.length; i++) {
+            const { x, y, score } = pose.keypoints[i];
+            if (score > 0.5) {
+              ctx.beginPath();
+              ctx.arc(x, y, 5, 0, 2 * Math.PI);
+              ctx.fillStyle = "red";
+              ctx.fill();
+            }
+          }
+        }
       }
     }
   </script>
