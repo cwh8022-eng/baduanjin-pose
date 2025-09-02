@@ -3,35 +3,38 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識（PoseNet 14739 特徵 + 本地分類器）</title>
+  <title>八段錦動作辨識（自動對齊 labels + 除錯面板）</title>
   <style>
     :root{color-scheme:light dark}
     body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;margin:0;padding:20px;text-align:center}
     h1{color:#2c3e50;margin:6px 0 12px}
     #ver{color:#555;margin:4px 0 12px}
-    #msg{margin:8px 0 14px;font-weight:700;color:#c0392b;white-space:pre-line}
+    #msg{margin:8px 0 14px;font-weight:700;white-space:pre-line}
+    .ok{color:#16a34a}.bad{color:#dc2626}.warn{color:#ca8a04}
     .btn{margin:8px 6px;padding:10px 16px;font-size:15px;border:0;border-radius:8px;background:#2980b9;color:#fff;cursor:pointer}
-    .wrap{max-width:1080px;margin:0 auto;display:grid;grid-template-columns:420px 1fr;gap:16px;align-items:start}
+    .wrap{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:420px 1fr;gap:16px;align-items:start}
     canvas{display:block;margin:0 auto;border:2px solid #2c3e50;border-radius:12px;background:#000}
     .panel{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px 14px;text-align:left}
     .title{font-size:14px;color:#6b7280;margin:0 0 8px}
-    #topClass{font-size:20px;font-weight:800;color:#1f2937;margin-bottom:8px}
+    #topClass{font-size:20px;font-weight:800;color:#1f2937;margin:8px 0}
     .bar{display:flex;align-items:center;gap:10px;margin:8px 0}
-    .bar-name{width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1f2937}
+    .bar-name{width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1f2937}
     .bar-track{flex:1;height:14px;background:#e5e7eb;border-radius:999px;overflow:hidden}
     .bar-fill{height:100%;width:0%;background:#10b981;transition:width .12s linear}
     .bar-pct{width:72px;text-align:right;color:#374151;font-variant-numeric:tabular-nums}
+    .note{font-size:13px;color:#6b7280;margin-top:6px}
+    .dbg{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;margin-top:10px;white-space:pre-wrap}
+    video{position:absolute;left:-9999px;top:-9999px;width:0;height:0}
     @media (max-width:900px){.wrap{grid-template-columns:1fr}}
-    video{position:absolute;left:-9999px;top:-9999px;width:0;height:0} /* 影像來源隱藏 */
   </style>
 
-  <!-- 使用 TFJS 3.11（我們不載 tmPose）-->
+  <!-- TFJS 3.11（不載 tmPose） -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
-  <!-- 使用 PoseNet 抓原始輸出（heatmapScores / offsets）-->
+  <!-- PoseNet 2.2.1 -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet@2.2.1/dist/posenet.min.js"></script>
 </head>
 <body>
-  <h1>八段錦動作辨識（PoseNet → 14739 特徵 → 本地分類器）</h1>
+  <h1>八段錦動作辨識</h1>
   <div id="ver">初始化中…</div>
 
   <button id="btnCheck" class="btn">① 相機自檢</button>
@@ -42,28 +45,35 @@
   <div class="wrap">
     <canvas id="canvas" width="400" height="400"></canvas>
 
-    <div class="panel">
-      <p class="title">即時辨識結果（固定八式順序）</p>
-      <div id="topClass">尚未開始</div>
-      <div id="bars"></div>
+    <div>
+      <div class="panel">
+        <p class="title">即時辨識結果</p>
+        <div id="topClass">尚未開始</div>
+        <div id="bars"></div>
+        <div id="labelWarn" class="note"></div>
+      </div>
+
+      <div class="panel">
+        <p class="title">除錯面板（自動更新）</p>
+        <div id="debug" class="dbg">等待開始…</div>
+      </div>
     </div>
   </div>
 
-  <!-- 隱藏的影像來源 -->
   <video id="video" playsinline autoplay muted></video>
 
 <script>
 (function(){
-  // === 固定顯示順序（請改成與 metadata.json 的 labels 完全一致的字串）===
-  const EIGHT = [
-    '雙手托天理三焦',  // 1
-    '左右開弓似射雕',  // 2
-    '調理脾胃須單舉',  // 3
-    '五勞七傷往後瞧',  // 4
-    '搖頭擺尾去心火',  // 5
-    '兩手攀足固腎腰',  // 6
-    '攢拳怒目增氣力',  // 7
-    '背後七顛百病消'   // 8
+  // ➤ 你希望的固定顯示順序（若名稱與 metadata.labels 不同，系統會自動 fallback）
+  const DESIRED_EIGHT = [
+    '雙手托天理三焦',
+    '左右開弓似射雕',
+    '調理脾胃須單舉',
+    '五勞七傷往後瞧',
+    '搖頭擺尾去心火',
+    '兩手攀足固腎腰',
+    '攢拳怒目增氣力',
+    '背後七顛百病消'
   ];
 
   const modelURL    = './model.json';
@@ -74,15 +84,17 @@
   const video = document.getElementById('video');
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
+  const dbg = document.getElementById('debug');
   const $ = id => document.getElementById(id);
   const cssId = n => n.replace(/\s+/g,'-').replace(/[^-\w]/g,'');
 
   let classifier, labels=[], posenetModel, running=false, flip=true;
-  let smooth = Object.fromEntries(EIGHT.map(n=>[n,0]));
+  let displayOrder = [];           // 畫條用的實際順序（可能 = DESIRED_EIGHT，或 = metadata.labels）
+  let smooth = {};                 // 平滑值表
+  let lastTop = '';
 
   verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | backend=${tf.getBackend()||'-'}`;
-
-  function info(t, ok=false){ msgEl.style.color = ok?'#27ae60':'#c0392b'; msgEl.textContent = t; }
+  function info(t, ok){ msgEl.className = ok ? 'ok' : (ok===false ? 'bad' : ''); msgEl.textContent = t; }
 
   $('btnCheck').onclick = async ()=>{
     info('');
@@ -92,7 +104,7 @@
       st.getTracks().forEach(t=>t.stop());
       info('✅ 相機檢測成功，可以使用', true);
     }catch(e){
-      info(`相機自檢失敗：${e.name}\n${e.message||''}\n• NotAllowedError：曾按拒絕或站點權限被關。\n• NotFoundError：沒有可用攝影機。\n• 請用 HTTPS / localhost 並允許相機。`);
+      info(`相機自檢失敗：${e.name}\n${e.message||''}\n• NotAllowedError：曾按拒絕或站點權限被關。\n• NotFoundError：沒有可用攝影機。\n• 請用 HTTPS / localhost 並允許相機。`, false);
     }
   };
 
@@ -102,16 +114,16 @@
       try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
       await tf.ready();
 
-      // 檔案檢查 + 讀 labels
-      await fetch(modelURL,{cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`model.json HTTP ${r.status}`); });
+      // 讀 metadata 以取得 labels
       const meta = await fetch(metadataURL,{cache:'no-store'}).then(r=>r.json());
       labels = meta.labels || meta.classes || [];
-      if (labels.length === 0) throw new Error('metadata.json 缺少 labels');
+      if (!Array.isArray(labels) || labels.length === 0) throw new Error('metadata.json 缺少 labels');
 
-      // 載入你的本地分類器
+      // 載入分類器
+      await fetch(modelURL,{cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`model.json HTTP ${r.status}`); });
       classifier = await tf.loadLayersModel(modelURL);
 
-      // 載入 PoseNet（關鍵：inputResolution=257, outputStride=16）
+      // 載入 PoseNet（TM Pose 常見配置）
       posenetModel = await posenet.load({
         architecture: 'MobileNetV1',
         outputStride: 16,
@@ -119,38 +131,60 @@
         multiplier: 0.75
       });
 
+      // 建立顯示順序與條
+      prepareDisplayOrder();
+
       // 啟用相機
       const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user' }, audio:false });
       video.srcObject = stream;
       await video.play();
 
-      // 畫布
       canvas.width = 400; canvas.height = 400;
-
-      // 固定順序的分類條
-      buildBars(EIGHT);
 
       info('✅ 模型載入完成，相機啟動成功！', true);
       running = true;
       requestAnimationFrame(loop);
     }catch(e){
-      info('❌ 無法載入：\n' + (e.message||e.toString()));
+      info('❌ 無法載入：\n' + (e.message||e.toString()), false);
       console.error(e);
     }
   };
 
-  function buildBars(names){
-    const bars = $('bars'); bars.innerHTML='';
-    for(const n of names){
+  // 建立顯示順序（盡量用 DESIRED_EIGHT；若有缺失則 fallback 到 labels）
+  function prepareDisplayOrder(){
+    const missing = [];
+    const present = new Set(labels);
+    const order = [];
+    DESIRED_EIGHT.forEach(name=>{
+      if (present.has(name)) order.push(name);
+      else missing.push(name);
+    });
+    if (missing.length > 0){
+      // 有對不到的名稱 → 直接改用 metadata 的真實 labels 顯示，確保條會動
+      displayOrder = labels.slice();
+      $('labelWarn').innerHTML = `⚠️ <span class="warn">你指定的八式名稱與 metadata.labels 不完全一致：</span><br>
+      缺少：<b>${missing.join('、')}</b><br>
+      目前已改用 <b>metadata.labels</b> 的順序顯示。`;
+    }else{
+      displayOrder = order;
+      $('labelWarn').textContent = '';
+    }
+    // 建條
+    const bars = $('bars'); bars.innerHTML = '';
+    smooth = {};
+    displayOrder.forEach(n=>{
       const id = cssId(n);
+      smooth[n]=0;
       const row = document.createElement('div');
-      row.className='bar';
+      row.className = 'bar';
       row.innerHTML = `
         <div class="bar-name" title="${n}">${n}</div>
         <div class="bar-track"><div class="bar-fill" id="fill-${id}" style="width:0%"></div></div>
         <div class="bar-pct" id="pct-${id}">0.00%</div>`;
       bars.appendChild(row);
-    }
+    });
+    // 初始除錯
+    dbg.textContent = `labels(from metadata): ${JSON.stringify(labels)}\nusing order: ${JSON.stringify(displayOrder)}`;
   }
 
   async function loop(){
@@ -159,82 +193,82 @@
     requestAnimationFrame(loop);
   }
 
-  // 產生 TM Pose 分類器所需的 14739 特徵：heatmap(17*17*17) + offsets(17*17*34)
+  // 14739 特徵（heatmap 4913 + offsets 9826）
   function makeFeatures14739(heatmap, offsets){
-    const h = heatmap.reshape([17*17*17]);   // 4913
-    const o = offsets.reshape([17*17*34]);   // 9826
-    const concat = tf.concat([h, o]);        // 14739
-    const out = concat.reshape([1, 14739]);  // [1,14739]
+    const h = heatmap.reshape([17*17*17]);
+    const o = offsets.reshape([17*17*34]);
+    const concat = tf.concat([h, o]);
+    const out = concat.reshape([1, 14739]);
     h.dispose(); o.dispose(); concat.dispose();
     return out;
   }
-
-  // 直接用 PoseNet baseModel 取 raw outputs（注意：輸入要 3D [257,257,3]，不要 expandDims）
-  function posenetPredictRaw(img3d){
-    // img3d: [257,257,3]、正規化到 [-1,1]
-    return posenetModel.baseModel.predict(img3d);
-  }
+  // 直接用 baseModel.predict，輸入 3D [257,257,3]
+  function posenetPredictRaw(img3d){ return posenetModel.baseModel.predict(img3d); }
 
   async function predictOnce(){
     // 畫面
-    if (flip){
-      ctx.save(); ctx.scale(-1,1);
-      ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
-      ctx.restore();
-    } else {
-      ctx.drawImage(video,0,0,canvas.width,canvas.height);
-    }
+    if (flip){ ctx.save(); ctx.scale(-1,1); ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height); ctx.restore(); }
+    else { ctx.drawImage(video,0,0,canvas.width,canvas.height); }
 
-    // A) 用官方 API 估姿勢（只用來畫關鍵點/骨架）
+    // 估姿勢（畫線用）
     const pose = await posenetModel.estimateSinglePose(video, { flipHorizontal: flip });
     drawKeypoints(pose.keypoints, 0.5, ctx);
     drawSkeleton(pose.keypoints, 0.5, ctx);
 
-    // B) 自行 forward 取 heatmap/offsets → 組 14739 特徵
+    // 取 raw outputs → 14739
     const feat = tf.tidy(()=>{
-      // 取得 [257,257,3]（❗不要 expandDims），並正規化到 [-1,1]
       let t = tf.browser.fromPixels(video);                // [H,W,3]
       t = tf.image.resizeBilinear(t, [257,257]).toFloat(); // [257,257,3]
-      t = t.div(127.5).sub(1);                             // [-1,1]，仍是 [257,257,3]
-
-      const out = posenetPredictRaw(t);                    // baseModel 內部會自動加 batch
+      t = t.div(127.5).sub(1);                             // [-1,1]
+      const out = posenetPredictRaw(t);                    // batched internally
       const heatmap = out.heatmapScores;                   // [1,17,17,17]
       const offsets = out.offsets;                         // [1,17,17,34]
-
       const f = makeFeatures14739(heatmap, offsets);       // [1,14739]
       t.dispose();
       return f;
     });
 
-    // C) 丟入你的分類器
-    const pred = classifier.predict(feat);                 // [1, numClasses]
+    // 分類
+    const pred = classifier.predict(feat);
     const probs = Array.from(await pred.data());
     pred.dispose(); feat.dispose();
 
-    // D) 對齊 metadata 的 labels → 映射到固定 EIGHT 順序並更新 UI
+    // 映射：用 metadata 的 labels -> 值
     const map = {};
     labels.forEach((name,i)=> map[name] = probs[i] || 0);
 
-    const alpha = 0.35;
-    let topName = EIGHT[0], topProb = 0;
-    for(const name of EIGHT){
+    // 依照 displayOrder 更新條
+    const alpha=0.35;
+    let topName = displayOrder[0] || '', topProb = 0;
+    displayOrder.forEach(name=>{
       const p = map[name] ?? 0;
       const val = alpha*p + (1-alpha)*(smooth[name]||0);
       smooth[name] = val;
 
-      const pct = (val*100);
-      const id  = cssId(name);
+      const pct = val*100;
+      const id = cssId(name);
       const fill = document.getElementById(`fill-${id}`);
       const txt  = document.getElementById(`pct-${id}`);
       if (fill) fill.style.width = `${pct.toFixed(2)}%`;
       if (txt)  txt.textContent  = `${pct.toFixed(2)}%`;
 
       if (p > topProb){ topProb = p; topName = name; }
-    }
-    $('topClass').textContent = `目前辨識：${topName}（${(topProb*100).toFixed(2)}%）`;
+    });
+    if (!Number.isFinite(topProb)) topProb = 0;
+    $('topClass').textContent = `目前辨識：${topName || '—'}（${(topProb*100).toFixed(2)}%）`;
+
+    // 除錯：列出 top-3
+    const sorted = labels.map(n=>({n, p: map[n]||0})).sort((a,b)=>b.p-a.p).slice(0,3);
+    const changed = (lastTop!==sorted[0]?.n);
+    lastTop = sorted[0]?.n || '';
+    dbg.textContent =
+      `labels(from metadata): ${JSON.stringify(labels)}\n` +
+      `using order: ${JSON.stringify(displayOrder)}\n` +
+      `top3: ${sorted.map(x=>`${x.n}=${(x.p*100).toFixed(2)}%`).join(' | ')}\n` +
+      (changed ? '(top changed)\n' : '');
   }
 
-  /* ====== 簡易繪製工具 ====== */
+  /* ====== 畫關鍵點/骨架 ====== */
   function toTuple({y, x}) { return [x, y]; }
   function drawKeypoints(keypoints, minConfidence, ctx) {
     keypoints.forEach(kp=>{
