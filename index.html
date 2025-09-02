@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>八段錦動作辨識（TM 相容修正版）</title>
+  <title>八段錦動作辨識（TM 相容）</title>
   <style>
     body{font-family:Arial,Helvetica,sans-serif;background:#f5f7fb;margin:0;padding:24px;text-align:center}
     h1{margin:8px 0 4px;color:#1f2937}
@@ -22,23 +22,16 @@
     @media (max-width:900px){.wrap{grid-template-columns:1fr}}
   </style>
 
-  <!-- 1) 先載 TFJS -->
+  <!-- 1) 先載 tfjs（TM 相容版本） -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
-  <!-- 2) 立刻打 shim（一定要放在 tmPose 之前） -->
-  <script>
-    // teachablemachine-pose 會用到 Pt.fromPixels；把 Pt 指到 tf
-    window.Pt = window.tf;
-    // 舊版流程可能呼叫 tf.fromPixels；若不存在就橋到 tf.browser.fromPixels
-    if (typeof tf.fromPixels !== 'function' && tf.browser && typeof tf.browser.fromPixels === 'function') {
-      tf.fromPixels = tf.browser.fromPixels;
-    }
-  </script>
-  <!-- 3) 再載 tmPose -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <!-- 2) 再載「外部 shim 檔」；避免 CSP 擋 inline，也確保比 tmPose 早 -->
+  <script src="./shim-tmPose.js?v=1"></script>
+  <!-- 3) 最後載 tmPose -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=0.8"></script>
 </head>
 <body>
   <h1>八段錦動作辨識（Teachable Machine 相容）</h1>
-  <div id="hint">請於 HTTPS 或 localhost 開啟。此版與 TM 預覽相同流程。</div>
+  <div id="hint">請以 HTTPS 或 localhost 開啟。此版與 TM 預覽相同流程。</div>
   <button class="btn" id="btnStart">開始辨識</button>
   <div class="msg" id="msg"></div>
 
@@ -66,7 +59,7 @@
       model = await tmPose.load(modelURL, metadataURL);
       maxPredictions = model.getTotalClasses();
 
-      // 取 labels：優先用 model.poseMetadata；若沒有就直接抓 metadata.json 當後備
+      // labels：先用 model.poseMetadata；若沒有再抓 metadata.json
       if (model.poseMetadata && Array.isArray(model.poseMetadata.labels)) {
         labels = model.poseMetadata.labels.map(function(x){ return x.label || x; });
       } else {
