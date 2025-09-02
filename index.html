@@ -3,26 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦極簡辨識（shim 放在 tmPose 之前）</title>
+  <title>八段錦極簡辨識（tfjs 1.7.4 穩定版）</title>
 
-  <!-- 1) 先載入 tfjs（3.x 可） -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js?v=tf3110"></script>
-
-  <!-- 2) 立刻套用 shim：把 browser.fromPixels 轉接到 fromPixels
-         ※ 這段一定要在 tmPose 之前執行！ -->
-  <script>
-    (function () {
-      const v = tf?.version?.tfjs || "N/A";
-      console.log("tfjs version:", v);
-      if (typeof tf.fromPixels !== "function" &&
-          tf.browser && typeof tf.browser.fromPixels === "function") {
-        tf.fromPixels = tf.browser.fromPixels;   // ← 關鍵：先補好 fromPixels 給 tmPose 用
-        console.log("shim applied (pre-tmPose): tf.fromPixels -> tf.browser.fromPixels");
-      }
-    })();
-  </script>
-
-  <!-- 3) 再載入 tmPose（此時它就能拿到有 fromPixels 的 tf） -->
+  <!-- ★ 關鍵：tfjs 1.7.4（原生含 tf.fromPixels） -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js?v=tf174"></script>
+  <!-- tmPose 0.8（UMD） -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
 
   <style>
@@ -39,13 +24,15 @@
   <h1>八段錦極簡辨識</h1>
   <div id="ver"></div>
   <div id="err"></div>
-  <button id="startBtn">啟動辨識</button><br>
+  <button id="startBtn">啟動辨識</button><br/>
   <canvas id="canvas" width="400" height="400"></canvas>
   <div id="label-container"></div>
 
   <script>
+    // 顯示版本並確認 fromPixels 存在（1.7.4 應為 true）
     document.getElementById('ver').textContent =
-      "tfjs 版本：" + (tf?.version?.tfjs ?? "未載入");
+      "tfjs 版本：" + (tf?.version?.tfjs ?? "未載入") +
+      "；has tf.fromPixels = " + (typeof tf.fromPixels === "function");
 
     const MODEL_ROOT = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
     let model, webcam, ctx, labelContainer, maxPredictions;
@@ -57,22 +44,28 @@
       errEl.textContent = "";
 
       try {
-        await tf.setBackend('webgl');   // 若有問題可改 'cpu'
+        // ① backend 準備（1.x 也支援 setBackend）
+        try {
+          await tf.setBackend('webgl');
+        } catch { await tf.setBackend('cpu'); }
         await tf.ready();
         console.log("backend =", tf.getBackend(),
-                    "has tf.fromPixels =", typeof tf.fromPixels === "function");
+                    "tf.fromPixels =", typeof tf.fromPixels);
 
+        // ② 載入模型
         const modelURL = MODEL_ROOT + "model.json";
         const metadataURL = MODEL_ROOT + "metadata.json";
         model = await tmPose.load(modelURL, metadataURL);
         maxPredictions = model.getTotalClasses();
 
+        // ③ 啟用攝影機（需 HTTPS 或 localhost）
         const size = 400;
         webcam = new tmPose.Webcam(size, size, true);
-        await webcam.setup();
+        await webcam.setup();  // 會跳相機權限
         await webcam.play();
         requestAnimationFrame(loop);
 
+        // ④ 畫布/標籤
         const canvas = document.getElementById("canvas");
         ctx = canvas.getContext("2d");
         labelContainer = document.getElementById("label-container");
@@ -83,7 +76,7 @@
       } catch (e) {
         console.error(e);
         errEl.textContent = "⚠️ 無法啟動：" + e.message +
-          "（請確認 HTTPS/localhost、允許相機、或用無痕視窗強制重整）";
+          "（請確認 HTTPS/localhost、允許相機；如仍異常，開無痕視窗）";
       }
     }
 
