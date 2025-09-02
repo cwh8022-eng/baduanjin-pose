@@ -1,9 +1,43 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦極簡辨識（動態相容載入）</title>
+  <title>八段錦極簡辨識（鎖定 tfjs 1.7.4）</title>
+
+  <!-- 1) 只載這一個：tfjs 1.7.4（原生有 tf.fromPixels） -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js?v=tf174"></script>
+
+  <!-- 2) 立刻「鎖住」 tf，並保險補上 fromPixels（在 tmPose 之前執行） -->
+  <script>
+    (function lockTF(){
+      const ver = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : "N/A";
+      console.log("TFJS loaded:", ver);
+
+      // 若有 browser.fromPixels 但沒有 fromPixels，補上別名（保險）
+      if (typeof tf.fromPixels !== "function" &&
+          tf.browser && typeof tf.browser.fromPixels === "function") {
+        tf.fromPixels = tf.browser.fromPixels;
+      }
+
+      // 列出目前的 script 方便檢查是否有其它 tfjs
+      const scripts = Array.from(document.scripts).map(s => s.src).filter(Boolean);
+      console.log("Loaded scripts:", scripts);
+
+      // 重要：把 window.tf 鎖住，避免後續被覆蓋
+      try {
+        Object.freeze(tf.browser);
+        Object.defineProperty(window, "tf", { value: tf, writable: false, configurable: false });
+        console.log("✅ window.tf is now locked. fromPixels =", typeof tf.fromPixels);
+      } catch (e) {
+        console.warn("⚠️ 無法鎖住 window.tf：", e);
+      }
+    })();
+  </script>
+
+  <!-- 3) 現在再載 tmPose 0.8（會拿到已含 fromPixels 的 tf） -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
+
   <style>
     body{font-family:Arial,sans-serif;text-align:center;background:#f6f8fb;margin:0;padding:24px}
     h1{margin:8px 0 12px}
@@ -12,67 +46,25 @@
     canvas{border:2px solid #2c3e50;border-radius:10px}
     #label-container div{font-size:18px;margin-top:8px}
     button{margin:12px 0;padding:10px 20px;font-size:16px;background:#2980b9;color:#fff;border:0;border-radius:6px;cursor:pointer}
-    #startBtn{display:none}
   </style>
 </head>
 <body>
   <h1>八段錦極簡辨識</h1>
-  <div id="ver">初始化中…</div>
+  <div id="ver"></div>
   <div id="err"></div>
-  <button id="startBtn">啟動辨識</button><br/>
+  <button id="startBtn">啟動辨識</button><br>
   <canvas id="canvas" width="400" height="400"></canvas>
   <div id="label-container"></div>
 
   <script>
-    // --------- 動態載入工具 ---------
-    function loadScript(src) {
-      return new Promise((resolve, reject) => {
-        const s = document.createElement('script');
-        s.src = src + (src.includes('?') ? '&' : '?') + 'cb=' + Date.now(); // bust cache
-        s.onload = () => resolve(src);
-        s.onerror = () => reject(new Error('載入失敗：' + src));
-        document.head.appendChild(s);
-      });
+    // 顯示版本與 fromPixels 狀態
+    function showVer() {
+      const v = (tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : "未載入";
+      document.getElementById('ver').textContent =
+        `tfjs 版本：${v}；has tf.fromPixels = ${typeof tf.fromPixels === "function"}`;
     }
+    showVer();
 
-    // --------- 先載 TFJS（確保有 fromPixels）再載 tmPose ---------
-    (async () => {
-      const verEl = document.getElementById('ver');
-      const errEl = document.getElementById('err');
-
-      try {
-        // 1) 嘗試載 tfjs 1.3.2（Teachable Machine 早期範例常用）
-        await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.2/dist/tf.min.js');
-        if (!(window.tf && typeof tf.fromPixels === 'function')) {
-          // 2) 若仍沒有 fromPixels，則退回到 1.7.4（亦相容）
-          await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js');
-        }
-
-        // 最終檢查
-        if (!(window.tf && typeof tf.fromPixels === 'function')) {
-          throw new Error('tf.fromPixels 仍不可用。請以無痕視窗開啟或確認沒有其他擴充程式覆蓋 TF。');
-        }
-
-        verEl.textContent = `tfjs 版本：${tf.version.tfjs}；has tf.fromPixels = ${typeof tf.fromPixels === 'function'}`;
-
-        // 3) 載入 tmPose（0.8 UMD）
-        await loadScript('https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js');
-
-        if (!window.tmPose) {
-          throw new Error('teachablemachine/pose 未載入。');
-        }
-
-        // 顯示開始按鈕
-        document.getElementById('startBtn').style.display = 'inline-block';
-      } catch (e) {
-        console.error(e);
-        errEl.textContent = '⚠️ 初始化失敗：' + e.message;
-      }
-    })();
-  </script>
-
-  <script>
-    // --------- app 主程式 ---------
     const MODEL_ROOT = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
     let model, webcam, ctx, labelContainer, maxPredictions;
 
@@ -83,23 +75,28 @@
       errEl.textContent = "";
 
       try {
-        // backend 準備（1.x 也支援）
+        // ① backend 準備（1.x 也支援 setBackend）
         try { await tf.setBackend('webgl'); } catch { await tf.setBackend('cpu'); }
         await tf.ready();
-        console.log('backend =', tf.getBackend(), 'tf.fromPixels =', typeof tf.fromPixels);
+        console.log("backend =", tf.getBackend(), "; tf.fromPixels =", typeof tf.fromPixels);
 
-        // 載入模型
+        // 如果 fromPixels 還是不存在，直接拋錯（代表被其它腳本覆蓋）
+        if (typeof tf.fromPixels !== "function") {
+          throw new Error("tf.fromPixels 不可用：請用『無痕視窗』開啟，或停用擴充套件（有外掛在載另一個 tfjs 覆蓋）");
+        }
+
+        // ② 載入 TM 模型
         model = await tmPose.load(MODEL_ROOT + "model.json", MODEL_ROOT + "metadata.json");
         maxPredictions = model.getTotalClasses();
 
-        // 啟用攝影機（需 HTTPS 或 localhost）
+        // ③ 啟用攝影機（需 HTTPS 或 localhost）
         const size = 400;
         webcam = new tmPose.Webcam(size, size, true);
-        await webcam.setup();
+        await webcam.setup();      // 允許相機
         await webcam.play();
         requestAnimationFrame(loop);
 
-        // 畫布/標籤
+        // ④ 畫布/標籤
         const canvas = document.getElementById("canvas");
         ctx = canvas.getContext("2d");
         labelContainer = document.getElementById("label-container");
@@ -110,7 +107,7 @@
       } catch (e) {
         console.error(e);
         errEl.textContent = "⚠️ 無法啟動：" + e.message +
-          "（請確認 HTTPS/localhost、允許相機、或用無痕視窗強制重整）";
+          "（請確認 HTTPS/localhost、允許相機；仍異常請『無痕視窗』重試）";
       }
     }
 
