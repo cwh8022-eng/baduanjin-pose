@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識（固定八式 + 進度條）</title>
+  <title>八段錦動作辨識（含預檢工具）</title>
 
   <!-- 與 tmPose 相容且內建 tf.fromPixels -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
@@ -13,8 +13,11 @@
     :root { --w: 880px; }
     body { font-family: Arial, "Noto Sans TC", system-ui; background:#f3f5f8; padding:22px 14px 40px; color:#1f2937; }
     h1 { text-align:center; margin:0 0 10px; font-weight:700; }
-    .hint { text-align:center; color:#6b7280; margin-bottom:10px; }
+    .hint { text-align:center; color:#6b7280; margin:6px 0 12px; }
     .wrap { width:min(var(--w), 96vw); margin:0 auto; }
+    .btns { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-bottom:12px; }
+    button { padding:10px 16px; border:0; border-radius:10px; background:#0ea5e9; color:#fff; cursor:pointer; font-size:16px; box-shadow:0 4px 14px rgba(14,165,233,.25); }
+    button:hover { filter:brightness(1.05); }
     .stage { display:flex; gap:18px; align-items:flex-start; flex-wrap:wrap; }
     canvas { width:min(420px, 96vw); height:auto; border-radius:12px; border:2px solid #334155; background:#000; }
     .panel { flex:1 1 420px; min-width:320px; }
@@ -25,16 +28,20 @@
     .track { position:relative; background:#e5e7eb; border-radius:999px; overflow:hidden; height:22px; box-shadow: inset 0 1px 1px rgba(0,0,0,.06);}
     .bar { height:100%; width:0%; background:linear-gradient(90deg,#34d399,#10b981); color:#fff; line-height:22px; text-align:right; padding-right:8px; font-size:12px; font-weight:600; transition:width .18s ease; }
     .cls { position:absolute; right:8px; top:-18px; font-size:11px; color:#6b7280; }
-    button { display:block; margin:0 auto 14px; padding:10px 16px; border:0; border-radius:10px; background:#0ea5e9; color:#fff; cursor:pointer; font-size:16px; box-shadow:0 4px 14px rgba(14,165,233,.25); }
-    button:hover { filter:brightness(1.05); }
+    .log { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; color:#334155; text-align:left; background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:10px; margin:0 auto 12px; width:min(var(--w),96vw); }
   </style>
 </head>
 <body>
   <h1>八段錦動作辨識</h1>
-  <div class="hint">請以 HTTPS 或 localhost 開啟，並允許攝影機</div>
-  <div class="wrap">
-    <button onclick="init()">啟動辨識</button>
+  <div class="hint">步驟：① 先「檢查模型檔」通過 → ② 再「啟動辨識」。請以 HTTPS 或 localhost 開啟並允許攝影機。</div>
 
+  <div class="btns">
+    <button onclick="preflightCheck()">🔍 檢查模型檔</button>
+    <button onclick="init()">▶️ 啟動辨識</button>
+  </div>
+  <div id="preflightLog" class="log" style="display:none;"></div>
+
+  <div class="wrap">
     <div class="stage">
       <canvas id="canvas" width="400" height="400"></canvas>
       <div class="panel" id="list"></div>
@@ -45,6 +52,7 @@
   let model, webcam, ctx, maxPredictions;
   let indexMap = null;      // { D1: 0, D2: 3, ... }（target -> model index）
   let classNames = [];      // 模型回傳的 className
+  let BASE = null;
 
   // 固定顯示的八式（順序）
   const TARGETS = [
@@ -115,7 +123,7 @@
       list.appendChild(row);
     });
 
-    // 初次把對應到的模型類別名顯示在每條右上角
+    // 在每條右上角顯示實際對到的模型類別名
     if(indexMap){
       TARGETS.forEach(t=>{
         const idx=indexMap[t.key];
@@ -126,31 +134,68 @@
     }
   }
 
+  // －－－ 預檢工具 －－－
+  function logPreflight(msg){
+    const box = document.getElementById('preflightLog');
+    box.style.display='block';
+    box.innerHTML += (typeof msg==='string' ? msg : JSON.stringify(msg)) + '<br/>';
+  }
+  async function preflightCheck(){
+    document.getElementById('preflightLog').innerHTML=''; logPreflight('開始檢查…');
+    BASE = location.origin + (location.pathname.endsWith('/') ? location.pathname : location.pathname.replace(/[^/]+$/,'/'));
+    const modelURL   = BASE + 'model.json';
+    const metadataURL= BASE + 'metadata.json';
+    const weightsURL = BASE + 'weights.bin';
+    logPreflight({modelURL, metadataURL, weightsURL});
+
+    try {
+      const mRes = await fetch(modelURL, {cache:'no-store'});
+      if(!mRes.ok) throw new Error(`model.json HTTP ${mRes.status}`);
+      const mJson = await mRes.json();
+      logPreflight('✔ model.json 取得成功；manifest paths=' + JSON.stringify((mJson.weightsManifest && mJson.weightsManifest[0] && mJson.weightsManifest[0].paths)||[]));
+
+      // 先以 HEAD 取長度
+      const wHead = await fetch(weightsURL, {method:'HEAD', cache:'no-store'});
+      if(!wHead.ok) throw new Error(`weights.bin(HEAD) HTTP ${wHead.status}`);
+      const len = Number(wHead.headers.get('content-length')||0);
+      logPreflight('weights.bin content-length = ' + len);
+      if(!len || len%4!==0) throw new Error('weights.bin 大小不是 4 的倍數，可能上傳不完整。');
+
+      // 再 GET 一次驗證可讀
+      const wRes = await fetch(weightsURL, {cache:'no-store'});
+      if(!wRes.ok) throw new Error(`weights.bin(GET) HTTP ${wRes.status}`);
+      logPreflight('✔ weights.bin 下載可用');
+      logPreflight('✅ 預檢通過：可開始啟動辨識');
+    } catch (e){
+      logPreflight('❌ 預檢失敗：'+e.message);
+    }
+  }
+
+  // －－－ 啟動辨識 －－－
   async function init(){
-    // 依目前路徑自動載入模型檔
-    const BASE = location.origin + (location.pathname.endsWith('/') ? location.pathname : location.pathname.replace(/[^/]+$/,'/'));
-    const modelURL = BASE + 'model.json';
+    BASE = BASE || (location.origin + (location.pathname.endsWith('/') ? location.pathname : location.pathname.replace(/[^/]+$/,'/')));
+    const modelURL    = BASE + 'model.json';
     const metadataURL = BASE + 'metadata.json';
     console.log('[model paths]', {modelURL, metadataURL});
 
     model = await tmPose.load(modelURL, metadataURL);
     maxPredictions = model.getTotalClasses();
 
-    // 先嘗試從 metadata 取得 labels
+    // 從 metadata 取得 labels（若沒有就空字串佔位）
     let labels=[];
     try{
       const meta = await fetch(metadataURL, {cache:'no-store'}).then(r=>r.json());
-      const raw = meta.labels || meta.classes || [];
+      const raw  = meta.labels || meta.classes || [];
       labels = raw.map(x => (x && x.label) ? x.label : (typeof x==='string' ? x : ''));
-    }catch(e){}
+    }catch(_){}
     if(!labels.length) labels = new Array(maxPredictions).fill('');
 
-    // 先建立映射與 UI
+    // 建立映射與 UI
     indexMap = buildIndexMap(labels);
     classNames = labels.slice();
     buildUI(classNames);
 
-    // 設置 webcam
+    // 設定 webcam
     const size=400, flip=true;
     webcam = new tmPose.Webcam(size, size, flip);
     await webcam.setup();
@@ -175,7 +220,7 @@
     const { pose, posenetOutput } = await model.estimatePose(videoEl);
     const prediction = await model.predict(posenetOutput);
 
-    // 如果 classNames 還是空的，從第一次 prediction 補齊，重建映射與標籤
+    // 若第一次沒有 labels，從 prediction 補齊後重建 UI
     if(!classNames.filter(Boolean).length){
       classNames = prediction.map(p => p.className || '');
       indexMap = buildIndexMap(classNames);
