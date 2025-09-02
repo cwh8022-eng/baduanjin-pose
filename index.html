@@ -1,84 +1,90 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識（TM 原生相容版）</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>八段錦動作辨識（TM 相容修正版）</title>
   <style>
-    body {font-family: Arial, sans-serif; background:#f5f7fb; margin:0; padding:24px; text-align:center;}
-    h1 {margin:8px 0 4px; color:#1f2937;}
-    #hint {color:#6b7280; margin:0 0 16px;}
-    .btn {padding:10px 16px; border:0; border-radius:8px; background:#2563eb; color:#fff; cursor:pointer; font-size:15px;}
-    .wrap {max-width:980px; margin:16px auto; display:grid; grid-template-columns:420px 1fr; gap:16px; align-items:start;}
-    #webcam {display:block; width:400px; height:400px; border-radius:12px; background:#000; margin:0 auto; border:2px solid #1f2937;}
-    .panel {background:#fff; border:1px solid #e5e7eb; border-radius:12px; text-align:left; padding:12px 14px;}
-    .row {display:flex; align-items:center; gap:10px; margin:8px 0;}
-    .name {width:240px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-    .track {flex:1; height:14px; background:#e5e7eb; border-radius:999px; overflow:hidden;}
-    .fill {height:100%; width:0%; background:#10b981; transition:width .12s linear;}
-    .pct {width:70px; text-align:right; font-variant-numeric:tabular-nums;}
-    .msg {margin-top:12px; white-space:pre-line;}
-    .ok{color:#16a34a}.warn{color:#b45309}.bad{color:#dc2626}
-    @media (max-width:900px){ .wrap {grid-template-columns:1fr} }
+    body{font-family:Arial,Helvetica,sans-serif;background:#f5f7fb;margin:0;padding:24px;text-align:center}
+    h1{margin:8px 0 4px;color:#1f2937}
+    #hint{color:#6b7280;margin:0 0 16px}
+    .btn{padding:10px 16px;border:0;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-size:15px}
+    .wrap{max-width:980px;margin:16px auto;display:grid;grid-template-columns:420px 1fr;gap:16px;align-items:start}
+    #webcam{display:block;width:400px;height:400px;border-radius:12px;background:#000;margin:0 auto;border:2px solid #1f2937}
+    .panel{background:#fff;border:1px solid #e5e7eb;border-radius:12px;text-align:left;padding:12px 14px}
+    .row{display:flex;align-items:center;gap:10px;margin:8px 0}
+    .name{width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .track{flex:1;height:14px;background:#e5e7eb;border-radius:999px;overflow:hidden}
+    .fill{height:100%;width:0;background:#10b981;transition:width .12s linear}
+    .pct{width:70px;text-align:right;font-variant-numeric:tabular-nums}
+    .msg{margin-top:12px;white-space:pre-line}
+    .ok{color:#16a34a}.bad{color:#dc2626}
+    @media (max-width:900px){.wrap{grid-template-columns:1fr}}
   </style>
 
-  <!-- ✅ Teachable Machine 官方相容版本 -->
+  <!-- 1) 先載 TFJS -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
+  <!-- 2) 立刻打 shim（一定要放在 tmPose 之前） -->
+  <script>
+    // teachablemachine-pose 會用到 Pt.fromPixels；把 Pt 指到 tf
+    window.Pt = window.tf;
+    // 舊版流程可能呼叫 tf.fromPixels；若不存在就橋到 tf.browser.fromPixels
+    if (typeof tf.fromPixels !== 'function' && tf.browser && typeof tf.browser.fromPixels === 'function') {
+      tf.fromPixels = tf.browser.fromPixels;
+    }
+  </script>
+  <!-- 3) 再載 tmPose -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 </head>
 <body>
   <h1>八段錦動作辨識（Teachable Machine 相容）</h1>
-  <div id="hint">請於 HTTPS 或 localhost 開啟。此版本與 TM 預覽相同流程，辨識表現會與訓練時一致。</div>
+  <div id="hint">請於 HTTPS 或 localhost 開啟。此版與 TM 預覽相同流程。</div>
   <button class="btn" id="btnStart">開始辨識</button>
   <div class="msg" id="msg"></div>
 
   <div class="wrap">
     <canvas id="webcam" width="400" height="400"></canvas>
-    <div class="panel">
-      <div id="bars"></div>
-    </div>
+    <div class="panel"><div id="bars"></div></div>
   </div>
 
 <script>
 (function(){
-  // ---- 兼容 shim：修復 Pt.fromPixels 與 tf.fromPixels ----
-  // teachablemachine-pose@0.8 內部會引用 Pt.fromPixels；把 Pt 指到 tf。
-  window.Pt = window.tf;
-  // 舊版 TM 會呼叫 tf.fromPixels；若不存在則橋接到 tf.browser.fromPixels
-  if (typeof tf.fromPixels !== 'function' && tf.browser && typeof tf.browser.fromPixels === 'function') {
-    tf.fromPixels = tf.browser.fromPixels;
-  }
+  var modelURL='./model.json', metadataURL='./metadata.json';
+  var model, webcam, ctx, maxPredictions, labels=[];
+  var barsEl=document.getElementById('bars');
+  var msgEl=document.getElementById('msg');
+  var canvas=document.getElementById('webcam');
+  ctx=canvas.getContext('2d');
 
-  var modelURL = './model.json';
-  var metadataURL = './metadata.json';
-  var model, webcam, ctx, labelContainer, maxPredictions;
-  var barsEl = document.getElementById('bars');
-  var msgEl  = document.getElementById('msg');
-  var canvas = document.getElementById('webcam');
-  ctx = canvas.getContext('2d');
+  document.getElementById('btnStart').onclick=start;
 
-  log('TensorFlow.js=' + (tf && tf.version && tf.version.tfjs));
-
-  document.getElementById('btnStart').onclick = function(){ start(); };
+  function log(t,cls){ msgEl.className='msg '+(cls||''); msgEl.textContent=t; }
 
   async function start(){
     try{
-      // 載入 tmPose 模型（與 TM 預覽相同）
+      // 載入模型（tmPose 原生）
       model = await tmPose.load(modelURL, metadataURL);
       maxPredictions = model.getTotalClasses();
 
-      // 建立 webcam（與 TM 預覽相同：size=400, flip=true）
-      const size = 400, flip = true;
+      // 取 labels：優先用 model.poseMetadata；若沒有就直接抓 metadata.json 當後備
+      if (model.poseMetadata && Array.isArray(model.poseMetadata.labels)) {
+        labels = model.poseMetadata.labels.map(function(x){ return x.label || x; });
+      } else {
+        var meta = await fetch(metadataURL, {cache:'no-store'}).then(function(r){return r.json();});
+        var raw = meta.labels || meta.classes || [];
+        labels = raw.map(function(x){ return (x && x.label) ? x.label : x; });
+      }
+
+      // 建立 webcam（與 TM 預覽一致）
+      var size=400, flip=true;
       webcam = new tmPose.Webcam(size, size, flip);
-      await webcam.setup();               // 取得權限
-      await webcam.play();                // 開始串流
-      window.requestAnimationFrame(loop); // 進入推論迴圈
+      await webcam.setup();
+      await webcam.play();
+      window.requestAnimationFrame(loop);
 
       // 畫面與條列
-      canvas.width = size; canvas.height = size;
-      labelContainer = document.createElement('div');
-      labelContainer.className = 'list';
-      buildBars();
+      canvas.width=size; canvas.height=size;
+      buildBars(labels);
 
       log('✅ 模型與相機就緒', 'ok');
     }catch(e){
@@ -87,50 +93,45 @@
     }
   }
 
-  function buildBars(){
-    barsEl.innerHTML = '';
-    for (var i=0;i<maxPredictions;i++){
-      var row  = document.createElement('div'); row.className='row';
-      var name = document.createElement('div'); name.className='name'; name.textContent = model.poseMetadata.labels[i].label;
-      var track= document.createElement('div'); track.className='track';
-      var fill = document.createElement('div'); fill.className='fill'; fill.id='fill-'+i;
-      var pct  = document.createElement('div'); pct.className='pct'; pct.id='pct-'+i; pct.textContent='0.00%';
+  function buildBars(names){
+    barsEl.innerHTML='';
+    for (var i=0;i<names.length;i++){
+      var row=document.createElement('div'); row.className='row';
+      var name=document.createElement('div'); name.className='name'; name.textContent=names[i];
+      var track=document.createElement('div'); track.className='track';
+      var fill=document.createElement('div'); fill.className='fill'; fill.id='fill-'+i;
+      var pct=document.createElement('div'); pct.className='pct'; pct.id='pct-'+i; pct.textContent='0.00%';
       track.appendChild(fill); row.appendChild(name); row.appendChild(track); row.appendChild(pct);
       barsEl.appendChild(row);
     }
   }
 
   async function loop(){
-    webcam.update();      // 取得最新畫面
-    await predict();      // 預測並更新條列
+    webcam.update();
+    await predict();
     window.requestAnimationFrame(loop);
   }
 
   async function predict(){
-    // 估姿 + 分類（完全沿用 tmPose 內部流程）
-    const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
-    const prediction = await model.predict(posenetOutput);
+    const out = await model.estimatePose(webcam.canvas);
+    const prediction = await model.predict(out.posenetOutput);
 
-    // 繪製到 canvas
+    // 繪到畫布
     ctx.drawImage(webcam.canvas, 0, 0);
-    if (pose){
-      tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
-      tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
+    if (out.pose){
+      tmPose.drawKeypoints(out.pose.keypoints, 0.5, ctx);
+      tmPose.drawSkeleton(out.pose.keypoints, 0.5, ctx);
     }
 
     // 更新條列
-    for (var i=0;i<maxPredictions;i++){
-      var p = prediction[i].probability;
-      var fill = document.getElementById('fill-'+i);
-      var pct  = document.getElementById('pct-'+i);
-      var val = (p*100).toFixed(2) + '%';
-      if (fill) fill.style.width = val;
-      if (pct)  pct.textContent  = val;
+    for (var i=0;i<prediction.length;i++){
+      var p = prediction[i].probability || 0;
+      var w = (p*100).toFixed(2) + '%';
+      var f = document.getElementById('fill-'+i);
+      var t = document.getElementById('pct-'+i);
+      if (f) f.style.width = w;
+      if (t) t.textContent = w;
     }
-  }
-
-  function log(text, cls){
-    msgEl.className = 'msg ' + (cls||''); msgEl.textContent = text;
   }
 })();
 </script>
