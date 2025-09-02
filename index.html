@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦辨識（本地模型・相容版）</title>
+  <title>八段錦辨識（本地模型・shim 修復版）</title>
   <style>
     body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;text-align:center;padding:20px}
     h1{color:#2c3e50;margin:6px 0 12px}
@@ -14,12 +14,33 @@
     #labels div{font-size:16px;margin-top:6px}
   </style>
 
-  <!-- ★ 相容組合：Teachable Machine Pose 0.8 建議配 tfjs 1.3.x -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <!-- 先載 TFJS（用 3.11 或 1.3 其實都可，因為等下會做 shim） -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js?cb=1"></script>
+
+  <!-- ★ 關鍵：在載入 tmPose 之前，補上 fromPixels shim ★ -->
+  <script>
+    (function(){
+      if (window.tf) {
+        const hasOld = typeof tf.fromPixels === 'function';
+        const hasNew = tf.browser && typeof tf.browser.fromPixels === 'function';
+        if (!hasOld && hasNew) {
+          // 將新版 API 映射成舊版名稱，給 tmPose 使用
+          tf.fromPixels = function() { return tf.browser.fromPixels.apply(tf.browser, arguments); };
+          console.log('[shim] applied: tf.fromPixels -> tf.browser.fromPixels');
+        } else {
+          console.log('[shim] not needed. hasOld=', hasOld, 'hasNew=', hasNew);
+        }
+      } else {
+        console.warn('[shim] window.tf 不存在？');
+      }
+    })();
+  </script>
+
+  <!-- 再載 Teachable Machine Pose 0.8 -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?cb=1"></script>
 </head>
 <body>
-  <h1>八段錦辨識（本地模型・相容版）</h1>
+  <h1>八段錦辨識（本地模型・shim 修復版）</h1>
   <div id="ver">初始化中…</div>
 
   <button id="btnCheck">① 相機自檢</button>
@@ -71,18 +92,18 @@
     msgEl.style.color = '#c0392b';
     msgEl.textContent = '載入檢查中…';
     try{
-      // 檢查檔案是否存在（避免 404）
-      await mustOk(modelURL, 'model.json');
-      await mustOk(metadataURL, 'metadata.json');
-
-      // fromPixels 檢查（1.3.1 會是 function）
-      if(typeof tf.fromPixels !== 'function'){
-        throw new Error('tf.fromPixels 不可用（請確保 tfjs 使用 1.3.1 並且沒有被其它版本覆蓋）');
+      // fromPixels 檢查（已做 shim，這裡應該是 function）
+      if (typeof tf.fromPixels !== 'function') {
+        throw new Error('tf.fromPixels 仍不可用（shim 失敗或有外掛覆蓋 tf）。請用「訪客模式」重試。');
       }
 
       // backend
       try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
       await tf.ready();
+
+      // 確認本地檔存在
+      await mustOk(modelURL, 'model.json');
+      await mustOk(metadataURL, 'metadata.json');
 
       // 載入模型
       model = await tmPose.load(modelURL, metadataURL);
@@ -115,7 +136,7 @@
         '• model.json / metadata.json / weights.bin 三檔與 index.html 在同一資料夾。\n' +
         '• 檔名大小寫完全一致（GitHub Pages 大小寫有別）。\n' +
         '• 不是用 file:// 打開，請用 HTTPS 網址或 http://localhost。\n' +
-        '• 瀏覽器外掛可能注入其他版本 TFJS，若有請用訪客模式測試。';
+        '• 若仍失敗，請使用 Chrome「訪客模式」以排除外掛覆蓋 TFJS。';
       console.error(e);
     }
   };
