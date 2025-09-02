@@ -1,37 +1,28 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識</title>
+  <title>八段錦動作辨識 (tfjs@1.7.4 + shim)</title>
 
-  <!-- ✅ 固定 tfjs 1.7.4 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
-  <!-- ✅ 加入 shim -->
-  <script src="shim-tmPose.js"></script>
+  <!-- ✅ 固定 TFJS 1.7.4 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js?v=tf174"></script>
+
+  <!-- ✅ shim 在 tmPose 前 -->
+  <script src="./shim-tmPose.js?v=3"></script>
+
   <!-- ✅ Teachable Machine Pose -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
 
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      text-align: center;
-      background: #f5f5f5;
-      padding: 20px;
-    }
-    h1 { color: #2c3e50; }
-    #canvas { border: 2px solid #2c3e50; margin-top: 10px; }
-    #label-container div {
-      margin: 5px;
-      height: 20px;
-      background: #eee;
-      text-align: left;
-      padding-left: 10px;
-    }
+    body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+    canvas { border: 2px solid #444; margin-top: 10px; }
+    #label-container div { margin: 4px 0; text-align: left; }
+    .bar { height: 20px; background: #2ecc71; text-align: right; color: white; padding-right: 5px; }
   </style>
 </head>
 <body>
-  <h1>八段錦動作辨識</h1>
+  <h1>八段錦動作辨識 (tfjs@1.7.4 + shim)</h1>
   <button onclick="init()">啟動辨識</button>
   <div><canvas id="canvas"></canvas></div>
   <div id="label-container"></div>
@@ -40,16 +31,12 @@
     let model, webcam, ctx, labelContainer, maxPredictions;
 
     async function init() {
-      console.log("[start] init()");
-      const modelURL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/model.json";
-      const metadataURL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/metadata.json";
+      const modelURL = "model.json";
+      const metadataURL = "metadata.json";
 
-      // 載入模型
       model = await tmPose.load(modelURL, metadataURL);
       maxPredictions = model.getTotalClasses();
-      console.log("[load] model loaded, classes =", maxPredictions);
 
-      // 設定相機
       const size = 400;
       const flip = true;
       webcam = new tmPose.Webcam(size, size, flip);
@@ -57,19 +44,18 @@
       await webcam.play();
       window.requestAnimationFrame(loop);
 
-      // 設定畫布
       const canvas = document.getElementById("canvas");
-      canvas.width = size;
-      canvas.height = size;
+      canvas.width = size; canvas.height = size;
       ctx = canvas.getContext("2d");
 
-      // 顯示分類條
       labelContainer = document.getElementById("label-container");
       labelContainer.innerHTML = "";
       for (let i = 0; i < maxPredictions; i++) {
         const bar = document.createElement("div");
-        bar.id = "label-" + i;
-        bar.style.width = "0%";
+        const inner = document.createElement("div");
+        inner.classList.add("bar");
+        inner.style.width = "0%";
+        bar.appendChild(inner);
         labelContainer.appendChild(bar);
       }
     }
@@ -84,22 +70,17 @@
       const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
       const prediction = await model.predict(posenetOutput);
 
-      // 畫出鏡頭影像
       ctx.drawImage(webcam.canvas, 0, 0);
-
-      // 更新分類條
-      for (let i = 0; i < prediction.length; i++) {
-        const prob = (prediction[i].probability * 100).toFixed(1);
-        const bar = document.getElementById("label-" + i);
-        bar.style.width = prob + "%";
-        bar.innerHTML = `${prediction[i].className} (${prob}%)`;
-        bar.style.background = `linear-gradient(to right, #3498db ${prob}%, #eee ${prob}%)`;
-      }
-
-      // 骨架偵測
       if (pose) {
         tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
         tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
+      }
+
+      for (let i = 0; i < maxPredictions; i++) {
+        const prob = (prediction[i].probability * 100).toFixed(1);
+        const bar = labelContainer.childNodes[i].firstChild;
+        bar.style.width = prob + "%";
+        bar.innerHTML = prediction[i].className + " " + prob + "%";
       }
     }
   </script>
