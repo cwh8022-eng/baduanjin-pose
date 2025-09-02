@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識（修正版：強制 softmax + 長度對齊）</title>
+  <title>八段錦動作辨識（對齊 D1~D8 標籤）</title>
   <style>
     :root{color-scheme:light dark}
     body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;margin:0;padding:20px;text-align:center}
@@ -69,28 +69,28 @@
 
 <script>
 (function(){
-  // 你想顯示的八段錦中文（固定順序）
-  const DESIRED_NAMES = [
-    '雙手托天理三焦',
-    '左右開弓似射雕',
-    '調理脾胃須單舉',
-    '五勞七傷往後瞧',
-    '搖頭擺尾去心火',
-    '兩手攀足固腎腰',
-    '攢拳怒目增氣力',
-    '背後七顛百病消'
+  // 固定顯示的八段錦中文（按 D1~D8 的次序）
+  const DESIRED_8 = [
+    '雙手托天理三焦',   // D1
+    '左右開弓似射鵰',   // D2（你提供的是「鵰」字）
+    '調理脾胃須單舉',   // D3
+    '五勞七傷往後瞧',   // D4
+    '搖頭擺尾去心火',   // D5
+    '兩手攀足固腎腰',   // D6
+    '攢拳怒目增氣力',   // D7
+    '背後七顛百病消'    // D8
   ];
 
   const modelURL = './model.json';
   const metadataURL = './metadata.json';
 
-  // PoseNet 設定（對應 14739 維）
+  // PoseNet 設定（對應 TM 常用配置 → 14739 特徵）
   const PNET_CFG = { architecture:'MobileNetV1', outputStride:16, inputResolution:{width:257,height:257}, multiplier:0.75 };
 
-  // 穩定化參數
+  // 穩定化與品質門檻
   const SMOOTH_ALPHA = 0.2;
-  const LOCK_FRAMES  = 6;     // 略微降低以提升靈敏度
-  const MIN_KP_SCORE = 0.25;  // 放寬一點，避免一直略過
+  const LOCK_FRAMES  = 6;
+  const MIN_KP_SCORE = 0.25;
   const SKIP_MSG_COOLDOWN = 30;
 
   // DOM
@@ -101,8 +101,8 @@
 
   let classifier, labels=[], posenetModel;
   let running=false, flip=true, facingMode='user';
-  let displayOrder=[], aliasMap={}, smooth={}, lastStable='';
-  let lockName='', lockCount=0, skipMsgCooldown=0, frameId=0;
+  let displayOrder=[], idxMap=[], smooth={}, lastStable='';
+  let lockName='', lockCount=0, skipMsgCooldown=0;
 
   verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | backend=${tf.getBackend()||'-'}`;
   function info(t, ok){ msgEl.className = ok===true?'ok':(ok===false?'bad':''); msgEl.textContent = t; }
@@ -140,15 +140,19 @@
       labels = meta.labels || meta.classes || [];
       if (!Array.isArray(labels) || labels.length === 0) throw new Error('metadata.json 缺少 labels');
 
-      // 依索引把模型 labels 映射為八段錦中文（若剛好 8 類）
-      aliasMap = {};
-      if (labels.length === DESIRED_NAMES.length) {
-        labels.forEach((lb,i)=> aliasMap[lb] = DESIRED_NAMES[i]);
-        displayOrder = DESIRED_NAMES.slice();
-        $('labelWarn').innerHTML = `<span class="ok">✅ 已依索引自動把模型 labels 對齊為八段錦中文。</span>`;
-      } else {
+      // 依 D1~D8 自動建立「索引對齊 + 顯示名」：
+      // 例： 'D1_correct - 雙手托天理三焦 正確' → 解析出 d=1 → 顯示名=DESIRED_8[0]
+      const parseD = (s)=>{ const m = /D\s*([1-8])/i.exec(s||''); return m ? (parseInt(m[1],10)-1) : -1; };
+      idxMap = labels.map(parseD); // 每個 label 對應到 0..7（若非 D1~D8 則為 -1）
+      const invalid = idxMap.some(i=>i<0) || new Set(idxMap.filter(i=>i>=0)).size<Math.min(8,labels.length);
+
+      if (invalid){
+        // 如果遇到非 D1~D8 的命名，退而用原生 labels 顯示（但仍可用）
         displayOrder = labels.slice();
-        $('labelWarn').innerHTML = `⚠️ <span class="warn">模型輸出數量為 ${labels.length}，與八段錦 8 式不一致。先以模型 labels 顯示。</span>`;
+        $('labelWarn').innerHTML = `⚠️ <span class="warn">有些標籤不是「D1~D8」格式，已改以模型原生 labels 顯示。</span>`;
+      } else {
+        displayOrder = DESIRED_8.slice(); // 用八段錦固定順序顯示
+        $('labelWarn').innerHTML = `<span class="ok">✅ 已依 D1~D8 自動對齊為八段錦中文順序。</span>`;
       }
 
       // 載入分類器
@@ -192,7 +196,7 @@
       barsEl.appendChild(row);
     });
     dbg.textContent = `labels(from metadata): ${JSON.stringify(labels)}\n` +
-                      `alias(by index if 8): ${JSON.stringify(aliasMap)}\n` +
+                      `idxMap(D1~D8→0..7): ${JSON.stringify(idxMap)}\n` +
                       `using order: ${JSON.stringify(displayOrder)}\n`;
   }
 
@@ -210,7 +214,6 @@
   async function loop(){
     if(!running) return;
     await predictOnce();
-    frameId++;
     requestAnimationFrame(loop);
   }
 
@@ -237,7 +240,7 @@
     drawSkeleton(pose.keypoints, 0.5, ctx);
 
     // 取 raw outputs → 14739 → 分類
-    let probs=[], rawLen=0;
+    let probs=[];
     if (!frameSkipped){
       const feat = tf.tidy(()=>{
         let t = tf.browser.fromPixels(video).toFloat();
@@ -250,30 +253,34 @@
         return f;
       });
 
-      const logits = classifier.predict(feat);   // 可能是 logits
-      rawLen = logits.shape[1] || 0;
-
-      // ★ 強制 softmax → 機率
-      const probT = tf.softmax(logits);
+      const logits = classifier.predict(feat);          // 可能是 logits
+      const probT  = tf.softmax(logits);                // ★ 強制 softmax → 機率
       probs = Array.from(await probT.data());
       probT.dispose(); logits.dispose(); feat.dispose();
     } else {
-      probs = new Array(displayOrder.length).fill(0);
-      rawLen = probs.length;
+      probs = new Array(labels.length).fill(0);
     }
 
-    // labels → 顯示名（依索引別名）
-    const mappedLabels = labels.map((lb,i)=> (labels.length===DESIRED_NAMES.length ? DESIRED_NAMES[i] : lb));
-    // 對齊最短長度，避免長度不一致
-    const L = Math.min(mappedLabels.length, probs.length);
-    const map = {};
-    for (let i=0;i<L;i++){ map[mappedLabels[i]] = probs[i] || 0; }
+    // ======= 依「D1~D8」索引映射到固定中文順序 =======
+    // idxMap[i] = 0..7 表示此 label 屬於第幾招；mapDisplay[中文] = 機率
+    const mapDisplay = {};
+    // 先預設 0
+    DESIRED_8.forEach(n => mapDisplay[n]=0);
+    // 把每個輸出的機率加到對應中文（若 labels > 8 或一招有多類，做加總）
+    for (let i=0;i<labels.length;i++){
+      const d = idxMap[i];               // 0..7 或 -1
+      if (d>=0 && d<DESIRED_8.length){
+        mapDisplay[DESIRED_8[d]] += (probs[i]||0);
+      }
+    }
+    // ==================================================
 
-    // 平滑 + 遲滯
-    let topName = displayOrder[0] || '', topProb = 0;
-    for (const name of displayOrder){
-      const p = map[name] ?? 0;
-      const val = SMOOTH_ALPHA*p + (1-SMOOTH_ALPHA)*(smooth[name]||0);
+    // 平滑 + 遲滯 + 更新條
+    const alpha=SMOOTH_ALPHA;
+    let topName=DESIRED_8[0], topProb=0;
+    for (const name of DESIRED_8){
+      const p = mapDisplay[name] ?? 0;
+      const val = alpha*p + (1-alpha)*(smooth[name]||0);
       smooth[name]=val;
 
       const pct = val*100;
@@ -288,23 +295,16 @@
     if (topName === lockName) lockCount++; else { lockName=topName; lockCount=1; }
     const stable = (lockCount>=LOCK_FRAMES)? lockName : (lastStable||lockName);
     lastStable = stable;
-
     $('topClass').textContent = `目前辨識：${stable || '—'}（${(topProb*100).toFixed(2)}%）`;
 
-    // 除錯：顯示長度與 top3
-    const pairs = [];
-    for (let i=0;i<L;i++) pairs.push({n:mappedLabels[i], p:probs[i]||0});
-    pairs.sort((a,b)=>b.p-a.p);
-    const top3 = pairs.slice(0,3).map(x=>`${x.n}=${(x.p*100).toFixed(2)}%`).join(' | ');
-
+    // 除錯：顯示前 3 高（以中文聚合後）
+    const pairs = DESIRED_8.map(n => ({n, p: mapDisplay[n]||0})).sort((a,b)=>b.p-a.p).slice(0,3);
     dbg.textContent =
       `labels(from metadata): ${JSON.stringify(labels)}\n` +
-      `mapped (by index if 8): ${JSON.stringify(mappedLabels)}\n` +
-      `using order: ${JSON.stringify(displayOrder)}\n` +
-      `probs.length=${probs.length}, labels.length=${labels.length}${probs.length!==labels.length?'  <-- ⚠️ 長度不一致，已自動對齊最短':''}\n` +
+      `idxMap(D1~D8→0..7): ${JSON.stringify(idxMap)}\n` +
+      `using fixed order: ${JSON.stringify(DESIRED_8)}\n` +
       `avg keypoint score: ${avgScore.toFixed(2)} ${frameSkipped?'(frame skipped)':''}\n` +
-      `top3: ${top3}\n`;
-
+      `top3(aggregated): ${pairs.map(x=>`${x.n}=${(x.p*100).toFixed(2)}%`).join(' | ')}\n`;
   }
 
   // 畫關鍵點/骨架
