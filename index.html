@@ -3,26 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦極簡辨識（shim 修正版）</title>
+  <title>八段錦極簡辨識（3.x 別名修正）</title>
 
-  <!-- 1) 先載入：tfjs 3.x（建議 3.11.0 或 3.9.0 都可） -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js?v=tf3110"></script>
-
-  <!-- 2) 立刻加上 shim：把 browser.fromPixels 轉接給 fromPixels（tmPose 會用到） -->
-  <script>
-    (function () {
-      const v = tf?.version?.tfjs || "N/A";
-      console.log("tfjs version:", v);
-      if (typeof tf.fromPixels !== "function" &&
-          tf.browser && typeof tf.browser.fromPixels === "function") {
-        tf.fromPixels = tf.browser.fromPixels;   // 👈 關鍵
-        console.log("shim applied: tf.fromPixels -> tf.browser.fromPixels");
-      }
-    })();
-  </script>
-
-  <!-- 3) 再載入：teachablemachine pose UMD 0.8 -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
+  <!-- tfjs 3.11.0（或 3.9.0 也可） -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
+  <!-- tmPose 0.8 UMD -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
   <style>
     body{font-family:Arial,sans-serif;text-align:center;background:#f6f8fb;margin:0;padding:24px}
@@ -43,7 +29,6 @@
   <div id="label-container"></div>
 
   <script>
-    // 顯示 tfjs 版本
     document.getElementById('ver').textContent =
       "tfjs 版本：" + (tf?.version?.tfjs ?? "未載入");
 
@@ -58,25 +43,31 @@
 
       try {
         // ① backend 準備
-        await tf.setBackend('webgl');   // 若出問題可改 'cpu'
+        await tf.setBackend('webgl');           // 若有問題改 'cpu'
         await tf.ready();
-        console.log("backend =", tf.getBackend(),
-                    "has tf.fromPixels =", typeof tf.fromPixels === "function");
 
-        // ② 載入模型
+        // ② ★ 關鍵：在 tfjs 3.x 動態補 tf.fromPixels（tmPose 內部會用到）
+        if (typeof tf.fromPixels !== "function" &&
+            tf.browser && typeof tf.browser.fromPixels === "function") {
+          tf.fromPixels = tf.browser.fromPixels;
+          console.log("shim applied: tf.fromPixels -> tf.browser.fromPixels");
+        }
+        console.log("backend =", tf.getBackend(), "has tf.fromPixels =", typeof tf.fromPixels === "function");
+
+        // ③ 載入模型
         const modelURL = MODEL_ROOT + "model.json";
         const metadataURL = MODEL_ROOT + "metadata.json";
         model = await tmPose.load(modelURL, metadataURL);
         maxPredictions = model.getTotalClasses();
 
-        // ③ 啟用攝影機
+        // ④ 啟用攝影機
         const size = 400;
         webcam = new tmPose.Webcam(size, size, true);
-        await webcam.setup();
+        await webcam.setup();     // 允許相機
         await webcam.play();
         requestAnimationFrame(loop);
 
-        // ④ 畫布/標籤
+        // ⑤ 畫布/標籤
         const canvas = document.getElementById("canvas");
         ctx = canvas.getContext("2d");
         labelContainer = document.getElementById("label-container");
