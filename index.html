@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦辨識（固定八式順序・避開 fromPixels）</title>
+  <title>八段錦辨識（鎖定 tfjs 1.7.4，固定八式順序）</title>
   <style>
     :root{color-scheme:light dark}
     body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;margin:0;padding:20px;text-align:center}
@@ -13,7 +13,6 @@
     .btn{margin:8px 6px;padding:10px 16px;font-size:15px;border:0;border-radius:8px;background:#2980b9;color:#fff;cursor:pointer}
     .wrap{max-width:1080px;margin:0 auto;display:grid;grid-template-columns:420px 1fr;gap:16px;align-items:start}
     canvas{display:block;margin:0 auto;border:2px solid #2c3e50;border-radius:12px;background:#000}
-    video{position:absolute;left:-9999px;top:-9999px;width:0;height:0} /* 影像來源隱藏 */
     .panel{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px 14px;text-align:left}
     .title{font-size:14px;color:#6b7280;margin:0 0 8px}
     #topClass{font-size:20px;font-weight:800;color:#1f2937;margin-bottom:8px}
@@ -25,60 +24,36 @@
     @media (max-width:900px){.wrap{grid-template-columns:1fr}}
   </style>
 
-  <!-- 先載 TFJS（3.x 也可以，因為我們不走 tmPose.Webcam） -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
+  <!-- 1) 只載「一次」 tfjs 1.7.4（這版內建 tf.fromPixels） -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
 
-  <!-- 修補 + 監控 tf.fromPixels，並在確認 OK 後才動態載入 tmPose -->
+  <!-- 2) 立刻把 window.tf 鎖死，避免任何覆寫；同時把 fromPixels 固化 -->
   <script>
-    const ensureFromPixels = (tfobj)=>{
-      if(!tfobj) return false;
-      const hasOld = typeof tfobj.fromPixels === 'function';
-      const hasNew = tfobj.browser && typeof tfobj.browser.fromPixels === 'function';
-      if(!hasOld && hasNew){
-        try{ Object.defineProperty(tfobj,'fromPixels',{value:tfobj.browser.fromPixels.bind(tfobj.browser),writable:false,configurable:false}); }
-        catch(_){ tfobj.fromPixels = tfobj.browser.fromPixels.bind(tfobj.browser); }
-        console.log('[fix] tf.fromPixels <- tf.browser.fromPixels');
+    (function hardLockTF(){
+      if(!window.tf){ console.error('[hardLockTF] tf not found'); return; }
+      // 若沒有舊 API，就從 browser 版映射一次
+      if (typeof tf.fromPixels !== 'function' && tf.browser && typeof tf.browser.fromPixels === 'function') {
+        try { Object.defineProperty(tf, 'fromPixels', { value: tf.browser.fromPixels.bind(tf.browser), writable:false, configurable:false }); }
+        catch(_) { tf.fromPixels = tf.browser.fromPixels.bind(tf.browser); }
+        console.log('[hard] install tf.fromPixels from tf.browser.fromPixels');
       }
-      return typeof tfobj.fromPixels === 'function';
-    };
-
-    // 安裝 setter，若外掛覆蓋 window.tf 就立刻修補
-    (function guardTF(){
-      ensureFromPixels(window.tf);
-      let _tf = window.tf;
-      try{
-        Object.defineProperty(window,'tf',{
-          configurable:true,
-          get(){ return _tf; },
-          set(v){ _tf=v; const ok=ensureFromPixels(_tf); console.warn('[guard] window.tf replaced. fromPixels ok =', ok); setVer(); }
-        });
-      }catch(e){
-        let last=window.tf;
-        setInterval(()=>{ if(window.tf!==last){ last=window.tf; const ok=ensureFromPixels(last); console.warn('[watch] tf changed. fromPixels ok =',ok); setVer(); }},300);
+      // 把 tf 本身凍結，避免其方法被改
+      try { Object.freeze(tf); } catch(_) {}
+      // 把 window.tf 設為不可寫、不可重新定義（最關鍵）
+      try {
+        Object.defineProperty(window, 'tf', { value: tf, writable: false, configurable: false, enumerable: true });
+        console.log('[hard] window.tf locked');
+      } catch(e) {
+        console.warn('[hard] cannot lock window.tf', e);
       }
     })();
-
-    // 動態載入 tmPose（只有在確認 tf.fromPixels 可用後）
-    const loadTmPose = ()=> new Promise((res,rej)=>{
-      if(window.tmPose) return res();
-      if(!ensureFromPixels(window.tf)) return rej(new Error('tf.fromPixels 不可用'));
-      const s=document.createElement('script');
-      s.src='https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js';
-      s.onload=()=>{ console.log('[load] tmPose ready'); res(); };
-      s.onerror=()=> rej(new Error('teachablemachine-pose 載入失敗'));
-      document.head.appendChild(s);
-    });
-
-    function setVer(){
-      const el=document.getElementById('ver');
-      if(!el) return;
-      el.textContent=`SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | has fromPixels=${typeof(tf&&tf.fromPixels)==='function'}`;
-    }
-    document.addEventListener('DOMContentLoaded', setVer);
   </script>
+
+  <!-- 3) 再載 tmPose（這時它拿到的 tf 一定有 fromPixels） -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 </head>
 <body>
-  <h1>八段錦動作辨識（固定八式順序）</h1>
+  <h1>八段錦動作辨識（鎖定 tfjs 1.7.4）</h1>
   <div id="ver">初始化中…</div>
 
   <button id="btnCheck" class="btn">① 相機自檢</button>
@@ -90,18 +65,15 @@
     <canvas id="canvas" width="400" height="400"></canvas>
 
     <div class="panel">
-      <p class="title">即時辨識結果</p>
+      <p class="title">即時辨識結果（固定八式順序）</p>
       <div id="topClass">尚未開始</div>
       <div id="bars"></div>
     </div>
   </div>
 
-  <!-- 隱藏的影像來源 -->
-  <video id="video" playsinline autoplay muted></video>
-
 <script>
 (function(){
-  // === 你要的固定順序（請改成你 metadata.json 裡的精準類別名稱）===
+  // === 依序顯示的八段錦八式（請改成與 metadata.json 裡 labels 完全一致）===
   const EIGHT = [
     '雙手托天理三焦',  // 1
     '左右開弓似射雕',  // 2
@@ -113,71 +85,72 @@
     '背後七顛百病消'   // 8
   ];
 
-  const msg = (t, ok=false)=>{ const el=document.getElementById('msg'); el.style.color=ok?'#27ae60':'#c0392b'; el.textContent=t; };
-  const $ = (id)=>document.getElementById(id);
-
-  const video = $('video');
-  const canvas = $('canvas');
+  const verEl = document.getElementById('ver');
+  const msgEl = document.getElementById('msg');
+  const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
 
-  const modelURL = './model.json';
+  const modelURL    = './model.json';
   const metadataURL = './metadata.json';
 
-  let model, running=false;
-  let smooth = Object.fromEntries(EIGHT.map(n=>[n,0]));
+  let model, webcam, maxPred=0, smooth = Object.fromEntries(EIGHT.map(n=>[n,0]));
 
-  $('btnCheck').onclick = async ()=>{
-    msg('');
+  verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | has fromPixels=${typeof tf.fromPixels==='function'}`;
+
+  function info(t, ok=false){ msgEl.style.color = ok?'#27ae60':'#c0392b'; msgEl.textContent = t; }
+
+  document.getElementById('btnCheck').onclick = async ()=>{
+    info('');
     try{
       if(!window.isSecureContext) throw new Error('此頁面不是 HTTPS 或 localhost，瀏覽器會封鎖相機');
-      const st=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+      const st = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
       st.getTracks().forEach(t=>t.stop());
-      msg('✅ 相機檢測成功，可以使用', true);
+      info('✅ 相機檢測成功，可以使用', true);
     }catch(e){
-      msg(`相機自檢失敗：${e.name}\n${e.message||''}\n• NotAllowedError：曾按拒絕或站點權限被關。\n• NotFoundError：沒有可用攝影機。\n• 請用 HTTPS / localhost 並允許相機。`);
+      info(`相機自檢失敗：${e.name}\n${e.message||''}\n• NotAllowedError：曾按拒絕或站點權限被關。\n• NotFoundError：沒有可用攝影機。\n• 請用 HTTPS / localhost 並允許相機。`);
     }
   };
 
-  $('btnStart').onclick = async ()=>{
+  document.getElementById('btnStart').onclick = async ()=>{
     try{
-      msg('載入中…');
-
-      // 先保證 tmPose 只在 fromPixels 可用後才載入
-      await loadTmPose();
+      if (typeof tf.fromPixels !== 'function') {
+        throw new Error('tf.fromPixels 不可用（請以 Chrome「訪客模式」或停用擴充功能測試）');
+      }
 
       try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
       await tf.ready();
 
-      // 檔案存在檢查
+      // 檔案 OK 檢查
       await fetch(modelURL,{cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`model.json HTTP ${r.status}`); });
       await fetch(metadataURL,{cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`metadata.json HTTP ${r.status}`); });
 
-      // 載入模型
       model = await tmPose.load(modelURL, metadataURL);
+      maxPred = model.getTotalClasses();
 
-      // 啟用原生 video 畫面
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:'user' }, audio:false });
-      video.srcObject = stream;
-      await video.play();
+      // 建立 tmPose.Webcam（此時 tf.fromPixels 已鎖定）
+      webcam = new tmPose.Webcam(400, 400, true);
+      await webcam.setup();
+      await webcam.play();
 
-      // 畫布尺寸
-      canvas.width = 400; canvas.height = 400;
+      // 畫布準備
+      const canvasEl = canvas;
+      canvasEl.width = 400; canvasEl.height = 400;
 
-      // 建立固定順序的分類條
+      // 固定順序的分類條
       buildBars(EIGHT);
 
-      msg('✅ 模型載入完成，相機啟動成功！', true);
-      running = true;
+      info('✅ 模型載入完成，相機啟動成功！', true);
       requestAnimationFrame(loop);
     }catch(e){
-      msg('❌ 無法載入：\n' + (e.message||e.toString()));
+      info('❌ 無法載入：\n' + (e.message||e.toString()));
       console.error(e);
     }
   };
 
   function buildBars(names){
-    const bars = $('bars'); bars.innerHTML='';
-    names.forEach(n=>{
+    const bars = document.getElementById('bars');
+    bars.innerHTML='';
+    for(const n of names){
       const id = cssId(n);
       const row = document.createElement('div');
       row.className='bar';
@@ -186,49 +159,47 @@
         <div class="bar-track"><div class="bar-fill" id="fill-${id}" style="width:0%"></div></div>
         <div class="bar-pct" id="pct-${id}">0.00%</div>`;
       bars.appendChild(row);
-    });
+    }
   }
   const cssId = n => n.replace(/\s+/g,'-').replace(/[^-\w]/g,'');
 
   async function loop(){
-    if(!running) return;
+    webcam.update();
     await predict();
     requestAnimationFrame(loop);
   }
 
   async function predict(){
-    // 顯示畫面
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    // 直接把 video 丟給 estimatePose（完全不走 tmPose.Webcam → 不會觸發 fromPixels）
-    const { pose, posenetOutput } = await model.estimatePose(video);
+    const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
     const preds = await model.predict(posenetOutput);
 
+    ctx.drawImage(webcam.canvas, 0, 0);
     if (pose) {
       tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
       tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
     }
 
-    // 用 metadata 的 className 對應到我們的固定順序
-    // 先組成 map
+    // 將當前預測映射到固定順序
     const map = Object.fromEntries(preds.map(p=>[p.className, p.probability]));
-    // 指數平滑並更新固定排序的條
     const alpha = 0.35;
     let topName = EIGHT[0], topProb = 0;
+
     for (const name of EIGHT){
       const prob = map[name] ?? 0;
-      const val  = alpha*prob + (1-alpha)*(smooth[name] ?? 0);
+      const val  = alpha*prob + (1-alpha)*(smooth[name]||0);
       smooth[name] = val;
 
       const pct = (val*100);
       const id  = cssId(name);
-      const fill = $('fill-'+id), t = $('pct-'+id);
+      const fill = document.getElementById(`fill-${id}`);
+      const txt  = document.getElementById(`pct-${id}`);
       if (fill) fill.style.width = `${pct.toFixed(2)}%`;
-      if (t)    t.textContent   = `${pct.toFixed(2)}%`;
+      if (txt)  txt.textContent  = `${pct.toFixed(2)}%`;
 
       if (prob > topProb){ topProb = prob; topName = name; }
     }
-    $('topClass').textContent = `目前辨識：${topName}（${(topProb*100).toFixed(2)}%）`;
+    document.getElementById('topClass').textContent =
+      `目前辨識：${topName}（${(topProb*100).toFixed(2)}%）`;
   }
 })();
 </script>
