@@ -3,26 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識 (tfjs@1.7.4 + shim)</title>
+  <title>八段錦動作辨識 (tfjs@1.3.1)</title>
 
-  <!-- ✅ 固定 TFJS 1.7.4 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js?v=tf174"></script>
-
-  <!-- ✅ shim 在 tmPose 前 -->
-  <script src="./shim-tmPose.js?v=3"></script>
+  <!-- ✅ 固定 TFJS 1.3.1，這版一定有 tf.fromPixels -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
 
   <!-- ✅ Teachable Machine Pose -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
   <style>
     body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
     canvas { border: 2px solid #444; margin-top: 10px; }
     #label-container div { margin: 4px 0; text-align: left; }
-    .bar { height: 20px; background: #2ecc71; text-align: right; color: white; padding-right: 5px; }
+    .bar { height: 20px; background: #3498db; text-align: right; color: white; padding-right: 5px; }
   </style>
 </head>
 <body>
-  <h1>八段錦動作辨識 (tfjs@1.7.4 + shim)</h1>
+  <h1>八段錦動作辨識 (tfjs@1.3.1)</h1>
   <button onclick="init()">啟動辨識</button>
   <div><canvas id="canvas"></canvas></div>
   <div id="label-container"></div>
