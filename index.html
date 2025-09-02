@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>八段錦辨識（嚴格隔離版）</title>
+  <title>八段錦辨識（單檔・隔離＋放寬CSP）</title>
 
-  <!-- 可選：CSP 只允許 jsDelivr，避免外層再載入別的 TFJS（外掛可能繞過，故還是靠 iframe 隔離） -->
+  <!-- 放寬外層 CSP：允許 inline script，避免內嵌程式被擋 -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self';
-                 script-src 'self' https://cdn.jsdelivr.net;
+                 script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
                  connect-src 'self' https://teachablemachine.withgoogle.com https://storage.googleapis.com https://cdn.jsdelivr.net;
                  img-src 'self' data:;
                  style-src 'self' 'unsafe-inline';
@@ -16,7 +16,6 @@
                  frame-ancestors 'self';">
 
   <style>
-    :root { color-scheme: light dark; }
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Arial,Helvetica,sans-serif;
          background:#f6f8fb;margin:0;padding:24px;text-align:center}
     h1{margin:6px 0 10px}
@@ -31,30 +30,40 @@
   <h1>八段錦動作辨識（沙箱隔離，避免 TFJS 衝突）</h1>
   <div id="err"></div>
 
-  <!-- 關鍵：sandbox 內不給 allow-same-origin，徹底隔離外層；允許 camera -->
+  <!-- 允許相機；保留 allow-same-origin 讓模型可下載；仍依靠 CSP 限制來源 -->
   <iframe id="runner"
-          sandbox="allow-scripts allow-forms allow-pointer-lock allow-modals"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-modals"
           allow="camera *; microphone *"
           referrerpolicy="no-referrer"></iframe>
 
   <p class="tips">
-    使用：請在 <b>HTTPS</b> 或 <b>localhost</b> 開啟；按「啟動辨識」並允許相機。<br>
-    若仍被瀏覽器外掛干擾，請用 <b>訪客模式</b> 或全新使用者（比無痕更乾淨）。
+    請在 <b>HTTPS</b> 或 <b>localhost</b> 開啟，按「啟動辨識」並允許相機。<br>
+    若有外掛干擾，請用 <b>訪客模式</b> 或無痕視窗（外掛勿允許在無痕執行）。
   </p>
 </div>
 
 <script>
-  // 你的 Teachable Machine 模型 ID（可自行替換）
+  // 你的 Teachable Machine 模型 ID（可自行更換）
   const TM_MODEL_ID = "jX4OKw-11";
   const MODEL_URL = `https://teachablemachine.withgoogle.com/models/${TM_MODEL_ID}/`;
 
-  // 內嵌到 iframe 的沙箱頁面（和外層不同源）：固定 tfjs@1.7.4 + tmPose@0.8
+  // ★ 內頁也加上允許 inline 的 CSP，避免「Refused to execute inline script」
+  const innerCSP = `
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+                 script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
+                 connect-src 'self' https://teachablemachine.withgoogle.com https://storage.googleapis.com https://cdn.jsdelivr.net;
+                 img-src 'self' data:;
+                 style-src 'self' 'unsafe-inline';
+                 media-src *;">`;
+
   const srcdoc = `<!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang='zh-Hant'>
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta charset='utf-8'/>
+<meta name='viewport' content='width=device-width,initial-scale=1'/>
 <title>Runner</title>
+${innerCSP}
 <style>
   body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Arial,Helvetica,sans-serif;
        background:#fff;margin:0;padding:16px;text-align:center}
@@ -63,7 +72,6 @@
   canvas{border:2px solid #2c3e50;border-radius:10px}
   #labels div{font-size:16px;margin-top:6px}
   button{margin:10px 0 14px;padding:10px 18px;font-size:16px;background:#2980b9;color:#fff;border:0;border-radius:6px;cursor:pointer}
-  pre{max-width:900px;margin:10px auto;text-align:left;background:#f7f7f7;border:1px solid #ddd;padding:8px;overflow:auto}
 </style>
 </head>
 <body>
@@ -74,7 +82,7 @@
   <canvas id="c" width="400" height="400"></canvas>
   <div id="labels"></div>
 
-  <!-- 只在沙箱內載入相容版本 -->
+  <!-- 固定相容版本：tfjs 1.7.4 + tmPose 0.8 -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
@@ -98,9 +106,8 @@
         // 1) backend
         try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
         await tf.ready();
-        console.log('backend =', tf.getBackend(), 'tf.fromPixels =', typeof tf.fromPixels);
         if(typeof tf.fromPixels !== 'function'){
-          throw new Error('tf.fromPixels 不可用（沙箱內不應發生）。');
+          throw new Error('tf.fromPixels 不可用（沙箱內不應發生）');
         }
 
         // 2) 載入模型
@@ -122,8 +129,7 @@
 
       }catch(e){
         console.error(e);
-        errEl.textContent = '⚠️ 無法啟動：' + e.message +
-          '（請確認 HTTPS/localhost 並允許相機）';
+        errEl.textContent = '⚠️ 無法啟動：' + e.message + '（請確認 HTTPS/localhost 並允許相機）';
       }
     }
 
@@ -152,8 +158,7 @@
 </body>
 </html>`;
 
-  const iframe = document.getElementById('runner');
-  iframe.srcdoc = srcdoc;
+  document.getElementById('runner').srcdoc = srcdoc;
 </script>
 </body>
 </html>
