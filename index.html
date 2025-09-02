@@ -1,215 +1,88 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>八段錦辨識（相機自檢・單檔隔離）</title>
-
-  <!-- 放寬外層 CSP 以允許內嵌 script（僅此頁） -->
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self';
-                 script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-                 connect-src 'self' https://teachablemachine.withgoogle.com https://storage.googleapis.com https://cdn.jsdelivr.net;
-                 img-src 'self' data:;
-                 style-src 'self' 'unsafe-inline';
-                 media-src *;">
-
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>八段錦辨識（沙箱內執行）</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Arial,Helvetica,sans-serif;
-         background:#f6f8fb;margin:0;padding:24px;text-align:center}
-    h1{margin:6px 0 10px}
-    #wrap{max-width:980px;margin:0 auto}
-    #err{color:#c0392b;font-weight:700;margin:8px 0;white-space:pre-line}
-    iframe{width:100%;height:760px;border:2px solid #2c3e50;border-radius:12px;background:#fff}
-    .tips{color:#666;font-size:13px;margin-top:8px}
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f4f8;
+      text-align: center;
+      padding: 20px;
+    }
+    h1 { color: #2c3e50; }
+    button {
+      margin: 10px;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      border: none;
+      border-radius: 5px;
+    }
+    #ver { margin: 10px; font-weight: bold; }
+    #err { margin-top: 10px; color: red; font-weight: bold; }
   </style>
 </head>
 <body>
-<div id="wrap">
-  <h1>八段錦動作辨識（相機自檢 → 相容載入）</h1>
+  <h1>八段錦辨識（沙箱內執行）</h1>
+  <div id="ver">環境檢查中...</div>
+  <button onclick="checkCamera()">① 相機自檢</button>
+  <button onclick="start()">② 載入模型並開始</button>
   <div id="err"></div>
 
-  <!-- 關鍵：不給 allow-same-origin，避免外層干擾；明確允許 camera/microphone -->
-  <iframe id="runner"
-          sandbox="allow-scripts allow-forms allow-pointer-lock allow-modals"
-          allow="camera; microphone"
-          referrerpolicy="no-referrer"></iframe>
-
-  <p class="tips">
-    請在 <b>HTTPS</b> 或 <b>localhost</b> 開啟。按「啟動辨識」後，點「允許」相機。<br>
-    若仍失敗：用 <b>訪客模式</b>（不是無痕）重試，或在網址列左邊的🔒檢查「相機」權限。
-  </p>
-</div>
-
-<script>
-  // 改成你的 TM 模型 ID
-  const TM_MODEL_ID = "jX4OKw-11";
-  const MODEL_URL = `https://teachablemachine.withgoogle.com/models/${TM_MODEL_ID}/`;
-
-  // 內頁（srcdoc）：先做相機自檢，成功才載 tfjs 1.7.4 + tmPose 0.8 + 模型
-  const inner = `<!DOCTYPE html>
-<html lang='zh-Hant'>
-<head>
-<meta charset='utf-8'/>
-<meta name='viewport' content='width=device-width,initial-scale=1'/>
-<title>Runner</title>
-<meta http-equiv="Content-Security-Policy"
-      content="default-src 'self';
-               script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-               connect-src 'self' https://teachablemachine.withgoogle.com https://storage.googleapis.com https://cdn.jsdelivr.net;
-               img-src 'self' data:;
-               style-src 'self' 'unsafe-inline';
-               media-src *;">
-<style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Arial,Helvetica,sans-serif;
-       background:#fff;margin:0;padding:16px;text-align:center}
-  #ver{color:#666;margin:6px 0 10px}
-  #err{color:#c0392b;font-weight:700;margin:8px 0;white-space:pre-line}
-  video,canvas{border:2px solid #2c3e50;border-radius:10px}
-  #labels div{font-size:16px;margin-top:6px}
-  button{margin:10px 0 14px;padding:10px 18px;font-size:16px;background:#2980b9;color:#fff;border:0;border-radius:6px;cursor:pointer}
-  .ok{color:#27ae60}
-</style>
-</head>
-<body>
-  <h3>八段錦辨識（沙箱內執行）</h3>
-  <div id="ver">初始化中…</div>
-  <div id="err"></div>
-
-  <button id="check">① 相機自檢</button>
-  <button id="start" disabled>② 載入模型並開始</button><br>
-
-  <video id="probe" playsinline muted autoplay style="width:320px;height:240px;display:none;"></video>
-  <canvas id="c" width="400" height="400" style="display:none;"></canvas>
-  <div id="labels"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
   <script>
-  const MODEL = "${MODEL_URL}";
-  let model, webcam, ctx, labels, maxPred, streamOK = false;
+    const verEl = document.getElementById("ver");
+    const errEl = document.getElementById("err");
 
-  const verEl = document.getElementById('ver');
-  const errEl = document.getElementById('err');
-  const probe = document.getElementById('probe');
-  const startBtn = document.getElementById('start');
-  const checkBtn = document.getElementById('check');
+    // ✅ 修正環境檢查：用 isSecureContext 來判斷
+    verEl.textContent = window.isSecureContext
+      ? "環境檢查：✅ Secure context (HTTPS/localhost)"
+      : "環境檢查：❌ 非安全環境（需 HTTPS 或 localhost）";
 
-  // 顯示執行環境
-  verEl.textContent = (location.protocol === 'https:' || location.hostname === 'localhost')
-    ? '環境檢查：✅ Secure context (HTTPS/localhost)'
-    : '環境檢查：❌ 非 HTTPS/localhost，瀏覽器會封鎖相機';
-
-  // ① 相機自檢
-  checkBtn.onclick = async () => {
-    errEl.textContent = '';
-    try{
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('此環境不支援 getUserMedia，請改 Chrome/Edge，並在 HTTPS/localhost 開啟。');
+    async function checkCamera() {
+      if (!window.isSecureContext) {
+        errEl.textContent = "此頁面不是安全環境（需 HTTPS 或 localhost），瀏覽器會封鎖相機。";
+        return;
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio:false });
-      probe.srcObject = stream;
-      probe.onloadedmetadata = () => probe.play();
-      probe.style.display = 'inline-block';
-      streamOK = true;
-      startBtn.disabled = false;
-      checkBtn.textContent = '① 相機自檢（✅ 通過）';
-      checkBtn.classList.add('ok');
-    }catch(e){
-      const msg = e && e.name ? e.name : 'Unknown';
-      errEl.textContent =
-        '相機自檢失敗：' + msg + '\\n' +
-        '• 若是 NotAllowedError：代表你按了拒絕，或站點權限被關閉。\\n' +
-        '• 若是 NotFoundError：沒有可用攝影機。\\n' +
-        '• 請確認 HTTPS/localhost、重新載入後允許相機。';
-      startBtn.disabled = true;
-    }
-  };
-
-  // 動態載入 script
-  function loadScript(src){
-    return new Promise((res,rej)=>{
-      const s=document.createElement('script');
-      s.src = src + (src.includes('?')?'&':'?') + 'cb=' + Date.now();
-      s.onload=()=>res();
-      s.onerror=()=>rej(new Error('載入失敗：'+src));
-      document.head.appendChild(s);
-    });
-  }
-
-  // ② 載入 TF 與模型並開始
-  startBtn.onclick = async () => {
-    errEl.textContent='';
-    if(!streamOK){ errEl.textContent='請先執行「① 相機自檢」並允許相機'; return; }
-
-    try{
-      await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js');
-      await loadScript('https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js');
-
-      verEl.textContent = 'tfjs 版本：' + (tf && tf.version && tf.version.tfjs ? tf.version.tfjs : '未載') +
-                          '；tf.fromPixels = ' + (typeof tf.fromPixels);
-
-      if(typeof tf.fromPixels !== 'function'){
-        throw new Error('tf.fromPixels 不可用（若你改檔案，請維持 tfjs@1.7.4）');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream.getTracks().forEach(t => t.stop());
+        errEl.textContent = "✅ 相機檢測成功，可以使用";
+      } catch (e) {
+        errEl.textContent = "相機自檢失敗：" + e.name;
       }
+    }
 
-      // backend
-      try { await tf.setBackend('webgl'); } catch { await tf.setBackend('cpu'); }
-      await tf.ready();
-
-      // 釋放自檢串流（讓 tmPose 使用自己的 Webcam）
-      if (probe.srcObject) {
-        probe.srcObject.getTracks().forEach(t=>t.stop());
-        probe.srcObject = null;
-        probe.style.display = 'none';
+    async function start() {
+      if (!window.isSecureContext) {
+        errEl.textContent = "此頁面不是安全環境（需 HTTPS 或 localhost），無法開啟相機。";
+        return;
       }
+      try {
+        const URL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
+        const modelURL = URL + "model.json";
+        const metadataURL = URL + "metadata.json";
+        const model = await tmPose.load(modelURL, metadataURL);
 
-      // 載入模型
-      model = await tmPose.load(MODEL + 'model.json', MODEL + 'metadata.json');
-      maxPred = model.getTotalClasses();
+        const webcam = new tmPose.Webcam(400, 400, true);
+        await webcam.setup();
+        await webcam.play();
+        errEl.textContent = "✅ 模型載入完成，相機啟動成功！";
+        document.body.appendChild(webcam.canvas);
 
-      // 啟用 tmPose 的 Webcam
-      const canvas = document.getElementById('c');
-      canvas.style.display='inline-block';
-      const size = 400;
-      webcam = new tmPose.Webcam(size, size, true);
-      await webcam.setup();
-      await webcam.play();
-      ctx = canvas.getContext('2d');
-      labels = document.getElementById('labels'); labels.innerHTML='';
-      for(let i=0;i<maxPred;i++){ labels.appendChild(document.createElement('div')); }
-
-      requestAnimationFrame(loop);
-      startBtn.textContent = '② 已開始（再次點擊可重啟）';
-    }catch(e){
-      console.error(e);
-      errEl.textContent = '啟動失敗：' + (e.message || e.toString());
+        async function loop() {
+          webcam.update();
+          window.requestAnimationFrame(loop);
+        }
+        loop();
+      } catch (e) {
+        errEl.textContent = "❌ 啟動失敗：" + e.message;
+      }
     }
-  };
-
-  async function loop(){
-    webcam.update();
-    await predict();
-    requestAnimationFrame(loop);
-  }
-
-  async function predict(){
-    const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
-    const pred = await model.predict(posenetOutput);
-
-    ctx.drawImage(webcam.canvas, 0, 0);
-    if(pose){
-      tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
-      tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
-    }
-    for(let i=0;i<pred.length;i++){
-      labels.childNodes[i].textContent =
-        pred[i].className + ': ' + (pred[i].probability*100).toFixed(2) + '%';
-    }
-  }
-  <\/script>
-</body>
-</html>`;
-
-  document.getElementById('runner').srcdoc = inner;
-</script>
+  </script>
 </body>
 </html>
