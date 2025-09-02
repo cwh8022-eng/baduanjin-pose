@@ -1,62 +1,48 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>八段錦動作辨識系統</title>
-
-  <!-- 必須先載入 TensorFlow.js -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0"></script>
-
-  <!-- 再載入 Teachable Machine Pose 模組 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
-
   <style>
     body {
-      font-family: 'Noto Sans TC', sans-serif;
-      background-color: #f0f4f8;
+      font-family: 'Arial', sans-serif;
+      background: #f0f4f8;
       text-align: center;
-      padding: 40px;
+      padding: 20px;
     }
     h1 {
       color: #2c3e50;
     }
-    p {
-      font-size: 18px;
-      color: #555;
-    }
-    canvas {
+    #webcam-container {
       margin-top: 20px;
-      border: 2px solid #2c3e50;
     }
     #label-container div {
-      font-size: 20px;
+      font-size: 18px;
       margin-top: 10px;
-      color: #16a085;
+      color: #34495e;
     }
     button {
       padding: 10px 20px;
-      font-size: 18px;
+      font-size: 16px;
       background-color: #27ae60;
       color: white;
       border: none;
-      border-radius: 8px;
       cursor: pointer;
-      margin-top: 20px;
-    }
-    button:hover {
-      background-color: #219150;
+      border-radius: 5px;
     }
     #error-message {
       color: red;
-      font-weight: bold;
-      margin-top: 20px;
+      margin-top: 10px;
     }
   </style>
 </head>
 <body>
   <h1>八段錦動作辨識系統</h1>
   <p>請開啟攝影機並執行八段錦動作，本系統將即時辨識姿勢正確與否。</p>
-  <button id="startButton">開始辨識</button>
+  <button onclick="init()">開始辨識</button>
   <div id="webcam-container"></div>
   <div id="label-container"></div>
   <div id="error-message"></div>
@@ -64,10 +50,8 @@
   <script type="text/javascript">
     let model, webcam, labelContainer, maxPredictions;
 
-    document.getElementById("startButton").addEventListener("click", init);
-
     async function init() {
-      const URL = "./";
+      const URL = "./"; // 模型路徑
       const modelURL = URL + "model.json";
       const metadataURL = URL + "metadata.json";
 
@@ -75,28 +59,27 @@
         model = await tmPose.load(modelURL, metadataURL);
         maxPredictions = model.getTotalClasses();
 
-        const size = 400;
         const flip = true;
-        webcam = new tmPose.Webcam(size, size, flip);
+        webcam = new tmPose.Webcam(400, 400, flip);
         await webcam.setup();
         await webcam.play();
         window.requestAnimationFrame(loop);
 
         document.getElementById("webcam-container").appendChild(webcam.canvas);
         labelContainer = document.getElementById("label-container");
-        labelContainer.innerHTML = ""; // 清空舊資料
         for (let i = 0; i < maxPredictions; i++) {
           labelContainer.appendChild(document.createElement("div"));
         }
-      } catch (error) {
-        console.error("Camera error:", error);
+
+      } catch (err) {
         document.getElementById("error-message").innerText =
-          "⚠️ 錯誤：無法開啟攝影機。請確認權限、使用 Chrome/Edge，並於 HTTPS 或 localhost 環境中執行。";
+          "⚠️ 無法開啟攝影機，請確認已允許鏡頭存取並使用 HTTPS 或 localhost 環境。";
+        console.error(err);
       }
     }
 
     async function loop() {
-      webcam.update();
+      webcam.update(); // 每幀更新鏡頭畫面
       await predict();
       window.requestAnimationFrame(loop);
     }
@@ -104,9 +87,9 @@
     async function predict() {
       const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
       const prediction = await model.predict(posenetOutput);
-
       for (let i = 0; i < maxPredictions; i++) {
-        const classPrediction = `${prediction[i].className}: ${(prediction[i].probability * 100).toFixed(2)}%`;
+        const classPrediction =
+          prediction[i].className + ": " + (prediction[i].probability * 100).toFixed(2) + "%";
         labelContainer.childNodes[i].innerHTML = classPrediction;
       }
     }
