@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦極簡辨識</title>
+  <title>八段錦極簡辨識（tfjs 1.7.4）</title>
 
-  <!-- 固定相容版本：tfjs 3.9.0 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js?v=tf390"></script>
-  <!-- 固定相容版本：teachablemachine pose 0.8 -->
+  <!-- ✅ 必須使用 tfjs 1.7.4（支援 tf.fromPixels） -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js?v=tf174"></script>
+  <!-- ✅ Teachable Machine Pose UMD 0.8 -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
 
   <style>
@@ -29,7 +29,7 @@
   <div id="label-container"></div>
 
   <script>
-    // 顯示 tfjs 版本
+    // 顯示版本
     document.getElementById('ver').textContent =
       "tfjs 版本：" + (tf?.version?.tfjs ?? "未載入");
 
@@ -43,11 +43,11 @@
       errEl.textContent = "";
 
       try {
-        // ✅ 先讓 TF backend 準備好
-        await tf.setBackend('webgl');   // 如果不行，改成 'cpu'
+        // ✅ tfjs 1.x 也支援 setBackend
+        await tf.setBackend('webgl');   // 若有問題改 'cpu'
         await tf.ready();
         console.log("backend =", tf.getBackend(),
-                    "fromPixels =", typeof tf.browser.fromPixels === "function");
+                    "has tf.fromPixels =", typeof tf.fromPixels === "function");
 
         // ① 載入模型
         const modelURL = MODEL_ROOT + "model.json";
@@ -58,14 +58,13 @@
         // ② 啟用攝影機（需 HTTPS 或 localhost）
         const size = 400;
         webcam = new tmPose.Webcam(size, size, true);
-        await webcam.setup();   // 會跳出相機權限
+        await webcam.setup();
         await webcam.play();
         requestAnimationFrame(loop);
 
         // ③ 畫布/標籤
         const canvas = document.getElementById("canvas");
         ctx = canvas.getContext("2d");
-
         labelContainer = document.getElementById("label-container");
         labelContainer.innerHTML = "";
         for (let i = 0; i < maxPredictions; i++) {
@@ -74,7 +73,7 @@
       } catch (e) {
         console.error(e);
         errEl.textContent = "⚠️ 無法啟動：" + e.message +
-          "（請確認 HTTPS/localhost、允許相機、或改用無痕視窗並強制重整）";
+          "（請確認 HTTPS/localhost、允許相機、或用無痕視窗強制重整）";
       }
     }
 
@@ -89,12 +88,10 @@
       const prediction = await model.predict(posenetOutput);
 
       ctx.drawImage(webcam.canvas, 0, 0);
-
       if (pose) {
         tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
         tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
       }
-
       for (let i = 0; i < prediction.length; i++) {
         const p = prediction[i];
         labelContainer.childNodes[i].textContent =
