@@ -1,110 +1,88 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>八段錦辨識（隔離執行）</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>八段錦辨識・穩定版</title>
+
+  <!-- 固定相容：tfjs 1.7.4（原生含 tf.fromPixels） -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
+  <!-- 固定相容：tmPose 0.8（UMD） -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+
   <style>
-    body{font-family:Arial,Helvetica,sans-serif;background:#f6f8fb;margin:0;padding:24px;text-align:center}
+    body{font-family:Arial,Helvetica,sans-serif;text-align:center;background:#f6f8fb;margin:0;padding:24px}
     h1{margin:8px 0 12px}
+    #ver{color:#666;margin:6px 0}
     #err{color:#c0392b;font-weight:700;margin:10px 0}
-    #wrap{max-width:960px;margin:0 auto}
-    iframe{width:100%;height:720px;border:2px solid #2c3e50;border-radius:12px;background:#fff}
-    .tips{color:#666;font-size:13px;margin-top:8px}
+    canvas{border:2px solid #2c3e50;border-radius:10px}
+    #labels div{font-size:16px;margin-top:6px}
+    button{margin:12px 0;padding:10px 18px;font-size:16px;background:#2980b9;color:#fff;border:0;border-radius:6px;cursor:pointer}
+    pre{max-width:900px;margin:10px auto;text-align:left;background:#fff;border:1px solid #ddd;padding:8px;overflow:auto}
   </style>
 </head>
 <body>
-<div id="wrap">
-  <h1>八段錦動作辨識（隔離版，避免 TFJS 衝突）</h1>
+  <h1>八段錦動作辨識（穩定相容組合）</h1>
+  <div id="ver"></div>
   <div id="err"></div>
-
-  <!-- 隔離執行的 iframe：允許相機、同源、腳本，但不讓外部覆蓋其 window.tf -->
-  <iframe id="runner"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-modals"
-          allow="camera *; microphone *"
-          referrerpolicy="no-referrer"></iframe>
-
-  <p class="tips">
-    若看不到相機畫面：請確認在 <b>HTTPS / localhost</b>、允許相機、並用 <b>無痕視窗</b> 開啟。
-  </p>
-</div>
-
-<script>
-  // 內部程式寫在 srcdoc，固定載 tfjs 1.7.4 + tmPose 0.8（相容 with tf.fromPixels）
-  const srcdoc = `<!DOCTYPE html>
-<html lang="zh-Hant">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Runner</title>
-<style>
-  body{font-family:Arial,Helvetica,sans-serif;background:#fff;margin:0;padding:16px;text-align:center}
-  #ver{color:#666;margin:6px 0 10px}
-  #err{color:#c0392b;font-weight:700;margin:8px 0}
-  canvas{border:2px solid #2c3e50;border-radius:10px}
-  #labels div{font-size:16px;margin-top:6px}
-  button{margin:10px 0 14px;padding:10px 18px;font-size:16px;background:#2980b9;color:#fff;border:0;border-radius:6px;cursor:pointer}
-</style>
-</head>
-<body>
-  <h3>八段錦辨識（沙箱內執行）</h3>
-  <div id="ver">初始化中…</div>
-  <div id="err"></div>
-  <button id="start">啟動辨識</button><br>
+  <button id="start">啟動辨識</button><br/>
   <canvas id="c" width="400" height="400"></canvas>
   <div id="labels"></div>
 
-  <!-- 固定相容版本：tfjs 1.7.4 + tmPose 0.8 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
-  <script>
-    // 顯示版本 & fromPixels 狀態
-    (function(){
-      const v = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : '未載入';
-      document.getElementById('ver').textContent = 'tfjs 版本：' + v + '；tf.fromPixels = ' + (typeof tf.fromPixels);
-    })();
-  </script>
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <h3 style="margin-top:18px;">本頁載入的 scripts（應該只看到 2 個）</h3>
+  <pre id="scripts"></pre>
 
   <script>
-  (function(){
+    // 顯示目前載入的 script，應只包含 tfjs@1.7.4 與 tmPose@0.8
+    const list = Array.from(document.scripts).map(s=>s.src).filter(Boolean);
+    document.getElementById('scripts').textContent = list.join('\n');
+
+    // 顯示 tfjs 版本與 fromPixels 狀態（1.7.4 應為 function）
+    const verText = "tfjs 版本：" + (tf?.version?.tfjs ?? "未載入")
+      + "；tf.fromPixels = " + (typeof tf.fromPixels);
+    document.getElementById('ver').textContent = verText;
+
     const MODEL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
+
     let model, webcam, ctx, labels, maxPred;
 
     document.getElementById('start').onclick = init;
 
     async function init(){
-      const errEl = document.getElementById('err'); errEl.textContent='';
-      try{
-        // 1) backend 準備（1.x 也支援）
-        try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
-        await tf.ready();
-        console.log('backend =', tf.getBackend(), 'tf.fromPixels =', typeof tf.fromPixels);
+      const errEl = document.getElementById('err');
+      errEl.textContent = "";
 
-        if(typeof tf.fromPixels !== 'function'){
-          throw new Error('tf.fromPixels 不可用（此頁面不應發生）。');
+      try{
+        // 1) backend（1.x 也支援）
+        try { await tf.setBackend('webgl'); } catch { await tf.setBackend('cpu'); }
+        await tf.ready();
+        console.log("backend =", tf.getBackend(), "tf.fromPixels =", typeof tf.fromPixels);
+
+        // fromPixels 若不是 function，表示仍被其它腳本覆蓋 → 停止並提示
+        if (typeof tf.fromPixels !== "function") {
+          throw new Error("tf.fromPixels 不可用：代表有其他腳本/外掛載入了不同版本的 TFJS。請改用『無痕視窗』且關閉能在無痕中執行的擴充套件，再重新整理。");
         }
 
-        // 2) 載入 TM 模型
-        model = await tmPose.load(MODEL + 'model.json', MODEL + 'metadata.json');
+        // 2) 載入模型
+        model = await tmPose.load(MODEL + "model.json", MODEL + "metadata.json");
         maxPred = model.getTotalClasses();
 
-        // 3) 啟用相機（需 HTTPS / localhost）
+        // 3) 相機（需 HTTPS 或 localhost）
         const size = 400;
         webcam = new tmPose.Webcam(size, size, true);
-        await webcam.setup();
+        await webcam.setup();   // 允許相機
         await webcam.play();
         requestAnimationFrame(loop);
 
-        // 4) 畫布與標籤
+        // 4) 畫布/標籤
         const canvas = document.getElementById('c');
         ctx = canvas.getContext('2d');
-        labels = document.getElementById('labels'); labels.innerHTML='';
-        for(let i=0;i<maxPred;i++){ labels.appendChild(document.createElement('div')); }
+        labels = document.getElementById('labels'); labels.innerHTML = "";
+        for (let i = 0; i < maxPred; i++) labels.appendChild(document.createElement('div'));
 
       }catch(e){
         console.error(e);
-        errEl.textContent = '⚠️ 無法啟動：' + e.message +
-          '（請確認 HTTPS/localhost 並允許相機；如仍異常，改用無痕視窗）';
+        errEl.textContent = "⚠️ 無法啟動：" + e.message;
       }
     }
 
@@ -119,21 +97,15 @@
       const pred = await model.predict(posenetOutput);
 
       ctx.drawImage(webcam.canvas, 0, 0);
-      if(pose){
+      if (pose) {
         tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
         tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
       }
-      for(let i=0;i<pred.length;i++){
+      for (let i = 0; i < pred.length; i++) {
         labels.childNodes[i].textContent =
-          pred[i].className + ': ' + (pred[i].probability*100).toFixed(2) + '%';
+          pred[i].className + ": " + (pred[i].probability * 100).toFixed(2) + "%";
       }
     }
-  })();
   </script>
-</body>
-</html>`;
-  const iframe = document.getElementById('runner');
-  iframe.srcdoc = srcdoc;
-</script>
 </body>
 </html>
