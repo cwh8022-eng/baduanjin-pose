@@ -1,41 +1,55 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="UTF-8">
   <title>八段錦動作辨識系統</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0"></script>
+
+  <!-- ✅ 使用與 Teachable Machine Pose 相容的 TensorFlow.js 舊版 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4"></script>
+
+  <!-- ✅ Teachable Machine Pose 模組 -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+
   <style>
     body {
-      font-family: 'Arial', sans-serif;
-      background: #f0f4f8;
+      font-family: 'Noto Sans TC', sans-serif;
+      background-color: #f0f4f8;
       text-align: center;
-      padding: 20px;
+      padding: 40px;
     }
     h1 {
       color: #2c3e50;
     }
-    #webcam-container {
+    p {
+      font-size: 18px;
+      color: #555;
+    }
+    canvas {
       margin-top: 20px;
+      border: 2px solid #2c3e50;
     }
     #label-container div {
-      font-size: 18px;
+      font-size: 20px;
       margin-top: 10px;
-      color: #34495e;
+      color: #16a085;
     }
     button {
       padding: 10px 20px;
-      font-size: 16px;
+      font-size: 18px;
       background-color: #27ae60;
       color: white;
       border: none;
+      border-radius: 8px;
       cursor: pointer;
-      border-radius: 5px;
+      margin-top: 20px;
+    }
+    button:hover {
+      background-color: #219150;
     }
     #error-message {
       color: red;
-      margin-top: 10px;
+      font-weight: bold;
+      margin-top: 20px;
     }
   </style>
 </head>
@@ -51,42 +65,49 @@
     let model, webcam, labelContainer, maxPredictions;
 
     async function init() {
-      const URL = "./"; // 模型路徑
+      const URL = "./";
       const modelURL = URL + "model.json";
       const metadataURL = URL + "metadata.json";
 
       try {
+        // 載入模型
         model = await tmPose.load(modelURL, metadataURL);
         maxPredictions = model.getTotalClasses();
 
-        const flip = true;
+        // 啟用攝影機
+        const flip = true; // 是否左右反轉
         webcam = new tmPose.Webcam(400, 400, flip);
-        await webcam.setup();
+        await webcam.setup(); // 要求使用者允許攝影機
         await webcam.play();
         window.requestAnimationFrame(loop);
 
+        // 顯示攝影機畫面
         document.getElementById("webcam-container").appendChild(webcam.canvas);
+
+        // 建立預測標籤容器
         labelContainer = document.getElementById("label-container");
         for (let i = 0; i < maxPredictions; i++) {
           labelContainer.appendChild(document.createElement("div"));
         }
-
-      } catch (err) {
+      } catch (error) {
+        console.error("Camera error:", error);
         document.getElementById("error-message").innerText =
-          "⚠️ 無法開啟攝影機，請確認已允許鏡頭存取並使用 HTTPS 或 localhost 環境。";
-        console.error(err);
+          "⚠️ 錯誤：無法開啟攝影機。請確認權限、使用 Chrome 或 Edge，並於 HTTPS 或 localhost 執行。";
       }
     }
 
     async function loop() {
-      webcam.update(); // 每幀更新鏡頭畫面
-      await predict();
-      window.requestAnimationFrame(loop);
+      webcam.update(); // 更新攝影機影像
+      await predict(); // 執行預測
+      window.requestAnimationFrame(loop); // 持續循環
     }
 
     async function predict() {
+      // 使用模型進行姿勢預測
       const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
       const prediction = await model.predict(posenetOutput);
+
+      // 顯示每個類別的預測機率
       for (let i = 0; i < maxPredictions; i++) {
         const classPrediction =
           prediction[i].className + ": " + (prediction[i].probability * 100).toFixed(2) + "%";
