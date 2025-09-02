@@ -3,59 +3,98 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識 (tfjs@1.3.1)</title>
+  <title>八段錦動作辨識</title>
 
-  <!-- 固定 TFJS 1.3.1（內建 tf.fromPixels，無需 shim） -->
+  <!-- 固定使用與 Teachable Machine Pose 相容的 tfjs -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
-  <!-- Teachable Machine Pose -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background:#f7f8fb; }
-    h1 { margin: 0 0 12px; color:#1f2937; }
-    canvas { border: 2px solid #374151; margin-top: 8px; border-radius: 8px; }
-    #label-container div { margin: 6px 0; text-align: left; background:#eee; border-radius:6px; overflow:hidden; }
-    .bar { height: 22px; background:#2563eb; color:#fff; text-align:right; padding-right:8px; line-height:22px; }
-    button { padding:10px 16px; border:0; border-radius:8px; background:#10b981; color:#fff; cursor:pointer; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f4f8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+    h1 {
+      color: #2c3e50;
+    }
+    canvas {
+      border: 2px solid #2c3e50;
+      margin-top: 20px;
+    }
+    .bar-container {
+      width: 400px;
+      background: #ddd;
+      margin: 5px 0;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .bar {
+      height: 24px;
+      line-height: 24px;
+      background: #2980b9;
+      color: #fff;
+      text-align: right;
+      padding-right: 5px;
+      width: 0%;
+      transition: width 0.2s ease;
+    }
+    button {
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 16px;
+      background-color: #2980b9;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
   <h1>八段錦動作辨識</h1>
   <button onclick="init()">啟動辨識</button>
-  <div><canvas id="canvas" width="400" height="400"></canvas></div>
+  <canvas id="canvas"></canvas>
   <div id="label-container"></div>
 
   <script>
     let model, webcam, ctx, labelContainer, maxPredictions;
 
     async function init() {
-      // 🔧 用「含 repo 名稱」的絕對路徑，避免抓到根目錄
-      const BASE = "https://cwh8022-eng.github.io/baduanjin-pose/";
-      const modelURL = BASE + "model.json";
-      const metadataURL = BASE + "metadata.json";
+      const modelURL = "model.json";     // ⚠️ 與 weights.bin / metadata.json 放同一資料夾
+      const metadataURL = "metadata.json";
 
       model = await tmPose.load(modelURL, metadataURL);
       maxPredictions = model.getTotalClasses();
 
-      const size = 400, flip = true;
+      const size = 400;
+      const flip = true;
       webcam = new tmPose.Webcam(size, size, flip);
       await webcam.setup();
       await webcam.play();
       window.requestAnimationFrame(loop);
 
       const canvas = document.getElementById("canvas");
+      canvas.width = size;
+      canvas.height = size;
       ctx = canvas.getContext("2d");
 
       labelContainer = document.getElementById("label-container");
       labelContainer.innerHTML = "";
       for (let i = 0; i < maxPredictions; i++) {
-        const wrap = document.createElement("div");
-        const bar  = document.createElement("div");
+        const barContainer = document.createElement("div");
+        barContainer.className = "bar-container";
+        const bar = document.createElement("div");
         bar.className = "bar";
-        bar.style.width = "0%";
-        wrap.appendChild(bar);
-        labelContainer.appendChild(wrap);
+        bar.textContent = "";
+        barContainer.appendChild(bar);
+        labelContainer.appendChild(barContainer);
       }
+
+      console.log("[start] init()");
     }
 
     async function loop() {
@@ -65,18 +104,25 @@
     }
 
     async function predict() {
-      const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+      const videoEl = webcam && webcam.webcam;
+      if (!videoEl || videoEl.readyState < 2) return;
+
+      // 使用 videoEl 作為輸入來源
+      const { pose, posenetOutput } = await model.estimatePose(videoEl);
       const prediction = await model.predict(posenetOutput);
 
-      ctx.drawImage(webcam.canvas, 0, 0);
+      // 畫到 canvas
+      ctx.drawImage(videoEl, 0, 0, ctx.canvas.width, ctx.canvas.height);
+
       if (pose) {
         tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
         tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
       }
 
-      for (let i = 0; i < maxPredictions; i++) {
+      // 更新八段錦色條
+      for (let i = 0; i < prediction.length; i++) {
         const prob = (prediction[i].probability * 100).toFixed(1);
-        const bar  = labelContainer.childNodes[i].firstChild;
+        const bar = labelContainer.childNodes[i].firstChild;
         bar.style.width = prob + "%";
         bar.textContent = `${prediction[i].className} ${prob}%`;
       }
