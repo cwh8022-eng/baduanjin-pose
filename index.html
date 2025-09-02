@@ -2,84 +2,94 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Teachable Machine - 八段錦動作辨識</title>
 
-  <!-- ✅ 固定相容版本（先載入 tfjs） -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js"></script>
-  <!-- ✅ 瀏覽器 UMD 版（再載入 tmPose 0.8） -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <!-- ✅ 固定相容版本（先載入 tfjs UMD）+ 強制避開快取 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js?v=tf390" crossorigin="anonymous"></script>
+  <!-- ✅ 固定相容版本（再載入 tmPose UMD）+ 強制避開快取 -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08" crossorigin="anonymous"></script>
 
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f0f4f8;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 20px;
-    }
-    h1 { color: #2c3e50; }
-    canvas { border: 2px solid #2c3e50; margin-top: 20px; }
-    #label-container div { font-size: 18px; margin-top: 10px; color: #34495e; }
-    button {
-      margin-top: 20px; padding: 10px 20px; font-size: 16px;
-      background-color: #2980b9; color: white; border: none; border-radius: 5px; cursor: pointer;
-    }
-    #ver { margin-top: 8px; color: #7f8c8d; font-size: 14px; }
-    #err { margin-top: 8px; color: #c0392b; }
+    body { font-family: Arial, sans-serif; background:#f0f4f8; display:flex; flex-direction:column; align-items:center; padding:20px; }
+    h1 { color:#2c3e50; margin-bottom:8px; }
+    #ver { color:#7f8c8d; font-size:14px; margin-bottom:8px; }
+    #err { color:#c0392b; margin:8px 0; font-weight:700; }
+    canvas { border:2px solid #2c3e50; margin-top:14px; }
+    #label-container div { font-size:18px; margin-top:10px; color:#34495e; }
+    button { margin-top:14px; padding:10px 20px; font-size:16px; background:#2980b9; color:#fff; border:none; border-radius:6px; cursor:pointer; }
+    button:hover { background:#2573a3; }
   </style>
 </head>
 <body>
   <h1>八段錦動作辨識</h1>
-  <button onclick="init()">啟動辨識</button>
-  <div id="ver"></div>
+  <div id="ver">tfjs 檢查中…</div>
   <div id="err"></div>
-  <div><canvas id="canvas"></canvas></div>
+  <button id="startBtn">啟動辨識</button>
+  <canvas id="canvas" width="400" height="400"></canvas>
   <div id="label-container"></div>
 
   <script>
-    // 顯示 tfjs 版本，確認載入成功
-    document.getElementById('ver').innerText =
-      "tfjs 版本：" + (window.tf && tf.version ? tf.version.tfjs : "未載入");
+    // ====== 開機自檢 ======
+    const verEl = document.getElementById('ver');
+    const errEl = document.getElementById('err');
+    try {
+      const v = (window.tf && tf.version && tf.version.tfjs) ? tf.version.tfjs : '未載入';
+      verEl.textContent = 'tfjs 版本：' + v;
+    } catch (_) {
+      verEl.textContent = 'tfjs 版本：未載入';
+    }
 
+    function assertEnv() {
+      // 1) 確認 tmPose 有載
+      if (!window.tmPose) {
+        throw new Error('tmPose 未載入（請確定使用 UMD 路徑 /0.8/dist/…，且順序在 tfjs 之後）');
+      }
+      // 2) 確認 fromPixels 可用
+      if (!tf.browser || typeof tf.browser.fromPixels !== 'function') {
+        throw new Error('tf.browser.fromPixels 不可用（通常是 tfjs 版本或快取錯誤；請強制重整 Ctrl/⌘+Shift+R）');
+      }
+    }
+
+    // ====== 主邏輯 ======
+    const MODEL_ROOT = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
     let model, webcam, ctx, labelContainer, maxPredictions;
 
-    async function init() {
-      const modelURL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/model.json";
-      const metadataURL = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/metadata.json";
+    document.getElementById('startBtn').addEventListener('click', init);
 
+    async function init() {
+      errEl.textContent = '';
       try {
-        if (!window.tmPose) {
-          throw new Error("tmPose 未載入，請確認已載入 teachablemachine/pose 0.8 的 UMD 檔。");
-        }
+        assertEnv();
+
+        const modelURL = MODEL_ROOT + "model.json";
+        const metadataURL = MODEL_ROOT + "metadata.json";
 
         // 1) 載入模型
         model = await tmPose.load(modelURL, metadataURL);
         maxPredictions = model.getTotalClasses();
 
         // 2) 啟用攝影機（需 HTTPS 或 localhost）
-        const size = 400;
-        const flip = true;
-        webcam = new tmPose.Webcam(size, size, flip);
-        await webcam.setup();   // 會跳出要求權限
+        webcam = new tmPose.Webcam(400, 400, true);
+        await webcam.setup(); // 會跳權限
         await webcam.play();
         window.requestAnimationFrame(loop);
 
         // 3) 畫布與標籤
-        const canvas = document.getElementById("canvas");
-        canvas.width = size; canvas.height = size;
-        ctx = canvas.getContext("2d");
+        const canvas = document.getElementById('canvas');
+        ctx = canvas.getContext('2d');
 
-        labelContainer = document.getElementById("label-container");
-        labelContainer.innerHTML = "";
+        labelContainer = document.getElementById('label-container');
+        labelContainer.innerHTML = '';
         for (let i = 0; i < maxPredictions; i++) {
-          labelContainer.appendChild(document.createElement("div"));
+          labelContainer.appendChild(document.createElement('div'));
         }
       } catch (e) {
         console.error(e);
-        document.getElementById("err").innerText =
-          "⚠️ 無法啟動：請確認（1）允許攝影機、（2）使用 HTTPS 或 localhost、（3）未封鎖相機、（4）版本未被快取舊檔。";
+        errEl.textContent = '⚠️ 無法啟動：' + e.message + '（請確認：HTTPS/localhost、允許攝影機、無其他 tfjs 版本重複載入、並強制重整）';
       }
     }
 
@@ -105,7 +115,7 @@
       // 顯示分類分數
       for (let i = 0; i < maxPredictions; i++) {
         const p = prediction[i];
-        labelContainer.childNodes[i].innerHTML =
+        labelContainer.childNodes[i].textContent =
           `${p.className}: ${(p.probability * 100).toFixed(2)}%`;
       }
     }
