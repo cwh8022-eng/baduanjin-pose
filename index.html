@@ -5,11 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Teachable Machine - 八段錦動作辨識</title>
 
-  <!-- ✅ 正確的 tfjs v3.11.0 -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
 
-  <!-- ✅ 正確的 TeachableMachine Pose v0.8 -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@latest"></script>
 
   <style>
     body {
@@ -64,7 +62,7 @@
       const flip = true;
 
       webcam = new tmPose.Webcam(size, size, flip);
-      await webcam.setup(); // ⚠️這裡會要求使用者開啟攝影機
+      await webcam.setup();
       await webcam.play();
       window.requestAnimationFrame(loop);
 
