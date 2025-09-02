@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識（PoseNet + 本地分類器）</title>
+  <title>八段錦動作辨識（PoseNet 14739 特徵 + 本地分類器）</title>
   <style>
     :root{color-scheme:light dark}
     body{font-family:Arial,Helvetica,sans-serif;background:#f0f4f8;margin:0;padding:20px;text-align:center}
@@ -25,13 +25,13 @@
     video{position:absolute;left:-9999px;top:-9999px;width:0;height:0} /* 影像來源隱藏 */
   </style>
 
-  <!-- 使用 tfjs 3.11（穩）-->
+  <!-- 用較新的 TFJS（不依賴 tmPose），我們自行組 14739 特徵 -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
-  <!-- 使用 PoseNet 抓關鍵點（不載 tmPose）-->
+  <!-- PoseNet 模型 -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet@2.2.1/dist/posenet.min.js"></script>
 </head>
 <body>
-  <h1>八段錦動作辨識（PoseNet + 本地分類器）</h1>
+  <h1>八段錦動作辨識（PoseNet → 14739 特徵 → 本地分類器）</h1>
   <div id="ver">初始化中…</div>
 
   <button id="btnCheck" class="btn">① 相機自檢</button>
@@ -66,23 +66,23 @@
     '背後七顛百病消'   // 8
   ];
 
+  const modelURL    = './model.json';
+  const metadataURL = './metadata.json';
+
   const verEl = document.getElementById('ver');
   const msgEl = document.getElementById('msg');
   const video = document.getElementById('video');
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const cssId = n => n.replace(/\s+/g,'-').replace(/[^-\w]/g,'');
 
-  const modelURL    = './model.json';
-  const metadataURL = './metadata.json';
-
-  let classifier, labels = [], posenetModel, running=false, flip=true;
+  let classifier, labels=[], posenetModel, running=false, flip=true;
   let smooth = Object.fromEntries(EIGHT.map(n=>[n,0]));
 
-  verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | engine=${tf.getBackend()||'-'}`;
+  verEl.textContent = `SecureContext=${window.isSecureContext} | tfjs=${(tf&&tf.version&&tf.version.tfjs)||'未載'} | backend=${tf.getBackend()||'-'}`;
 
   function info(t, ok=false){ msgEl.style.color = ok?'#27ae60':'#c0392b'; msgEl.textContent = t; }
-  const $ = id=>document.getElementById(id);
-  const cssId = n => n.replace(/\s+/g,'-').replace(/[^-\w]/g,'');
 
   $('btnCheck').onclick = async ()=>{
     info('');
@@ -102,7 +102,7 @@
       try{ await tf.setBackend('webgl'); }catch{ await tf.setBackend('cpu'); }
       await tf.ready();
 
-      // 檔案檢查
+      // 檔案檢查 + 讀 labels
       await fetch(modelURL,{cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error(`model.json HTTP ${r.status}`); });
       const meta = await fetch(metadataURL,{cache:'no-store'}).then(r=>r.json());
       labels = meta.labels || meta.classes || [];
@@ -111,7 +111,7 @@
       // 載入分類器（你的本地 model.json）
       classifier = await tf.loadLayersModel(modelURL);
 
-      // 載入 PoseNet
+      // 載入 PoseNet（**關鍵：inputResolution 257、outputStride 16**）
       posenetModel = await posenet.load({
         architecture: 'MobileNetV1',
         outputStride: 16,
@@ -124,10 +124,10 @@
       video.srcObject = stream;
       await video.play();
 
-      // 畫布尺寸
+      // 畫布
       canvas.width = 400; canvas.height = 400;
 
-      // 建立固定順序的分類條
+      // 固定順序的分類條
       buildBars(EIGHT);
 
       info('✅ 模型載入完成，相機啟動成功！', true);
@@ -141,7 +141,7 @@
 
   function buildBars(names){
     const bars = $('bars'); bars.innerHTML='';
-    names.forEach(n=>{
+    for(const n of names){
       const id = cssId(n);
       const row = document.createElement('div');
       row.className='bar';
@@ -150,7 +150,7 @@
         <div class="bar-track"><div class="bar-fill" id="fill-${id}" style="width:0%"></div></div>
         <div class="bar-pct" id="pct-${id}">0.00%</div>`;
       bars.appendChild(row);
-    });
+    }
   }
 
   async function loop(){
@@ -159,57 +159,79 @@
     requestAnimationFrame(loop);
   }
 
-  // 將 PoseNet 17 個關鍵點 (x,y) 正規化到 [0,1]，組成 34 維向量
-  function poseToInput(pose, w, h){
-    const arr = [];
-    for(const kp of pose.keypoints){
-      const x = Math.min(Math.max(kp.position.x / w, 0), 1);
-      const y = Math.min(Math.max(kp.position.y / h, 0), 1);
-      arr.push(x, y);
-    }
-    return tf.tensor2d([arr], [1, 34]);
+  // 產生 TM Pose 所需的 14739 特徵（heatmap 17*17*17 + offsets 17*17*34）
+  function makeFeatures14739(heatmap, offsets){
+    // heatmap shape: [1,17,17,17]、offsets shape: [1,17,17,34]
+    const h = heatmap.reshape([17*17*17]);
+    const o = offsets.reshape([17*17*34]);
+    const concat = tf.concat([h, o]);             // [14739]
+    const out = concat.reshape([1, 14739]);       // [1,14739]
+    h.dispose(); o.dispose(); concat.dispose();
+    return out;
+  }
+
+  // 直接用 PoseNet 的 baseModel.predict 取出 heatmap & offsets
+  function posenetPredictRaw(imgTensor){
+    // imgTensor: [1,257,257,3] 已正規化到 [-1,1]
+    // @tensorflow-models/posenet 的 baseModel.predict 會回傳字典：{heatmapScores, offsets, displacementFwd, displacementBwd}
+    return posenetModel.baseModel.predict(imgTensor);
   }
 
   async function predictOnce(){
-    // 顯示畫面
+    // 畫面
     if (flip){
-      ctx.save();
-      ctx.scale(-1,1);
+      ctx.save(); ctx.scale(-1,1);
       ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
       ctx.restore();
     } else {
       ctx.drawImage(video,0,0,canvas.width,canvas.height);
     }
 
-    // 估計姿勢
-    const pose = await posenetModel.estimateSinglePose(video, {
-      flipHorizontal: flip
-    });
-
-    // 畫關鍵點與骨架
+    // === A) 先用官方 API 估姿勢（拿關鍵點畫線用） ===
+    const pose = await posenetModel.estimateSinglePose(video, { flipHorizontal: flip });
     drawKeypoints(pose.keypoints, 0.5, ctx);
     drawSkeleton(pose.keypoints, 0.5, ctx);
 
-    // 組成分類器輸入並推論
-    const inp = poseToInput(pose, video.videoWidth, video.videoHeight);
-    const pred = tf.tidy(()=> classifier.predict(inp));
-    const probs = Array.from(await pred.data());
-    pred.dispose(); inp.dispose();
+    // === B) 自己做一次 forward，拿 heatmap & offsets ===
+    const feat = tf.tidy(()=>{
+      // 1) 取得 [1,257,257,3]，并正規化到 [-1,1]
+      let t = tf.browser.fromPixels(video);
+      t = tf.image.resizeBilinear(t, [257,257]).toFloat();
+      t = t.div(127.5).sub(1).expandDims(0);             // [1,257,257,3]
 
-    // 對齊 metadata 的 labels → 映射到固定 EIGHT 順序
+      // 2) 取 raw outputs
+      const out = posenetPredictRaw(t);
+      const heatmap = out.heatmapScores; // [1,17,17,17]
+      const offsets = out.offsets;       // [1,17,17,34]
+
+      // 3) 組成 14739 特徵
+      const f = makeFeatures14739(heatmap, offsets);
+
+      // 清理：原圖 tensor 釋放（heatmap/offsets 在 makeFeatures 內已處理）
+      t.dispose();
+      // out 裡其餘的 displacementFwd/Back 自動回收（沒存出來）
+
+      return f; // [1,14739]
+    });
+
+    // === C) 丟進你的分類器 ===
+    const pred = classifier.predict(feat);        // [1,numClasses]
+    const probs = Array.from(await pred.data());
+    pred.dispose(); feat.dispose();
+
+    // === D) 對齊 metadata 的 labels → 映射到固定 EIGHT 順序 ===
     const map = {};
     labels.forEach((name,i)=> map[name] = probs[i] || 0);
 
     const alpha = 0.35;
     let topName = EIGHT[0], topProb = 0;
-
     for(const name of EIGHT){
       const p = map[name] ?? 0;
       const val = alpha*p + (1-alpha)*(smooth[name]||0);
       smooth[name] = val;
 
       const pct = (val*100);
-      const id  = name.replace(/\s+/g,'-').replace(/[^-\w]/g,'');
+      const id  = cssId(name);
       const fill = document.getElementById(`fill-${id}`);
       const txt  = document.getElementById(`pct-${id}`);
       if (fill) fill.style.width = `${pct.toFixed(2)}%`;
