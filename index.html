@@ -3,41 +3,45 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦姿勢辨識</title>
-  <!-- 使用最新版 TensorFlow.js 和 Teachable Machine pose -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0"></script>
+  <title>Teachable Machine - 八段錦動作辨識</title>
+
+  <!-- ✅ 最新 TensorFlow.js，一定要放第一個 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
+
+  <!-- ✅ Teachable Machine Pose 最新版 -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+
   <style>
     body {
       font-family: 'Arial', sans-serif;
-      background-color: #f0f4f8;
+      background-color: #f8f8f8;
       text-align: center;
       padding: 20px;
     }
     canvas {
-      border: 2px solid #2c3e50;
+      border: 2px solid #333;
       margin-top: 20px;
     }
-    #label-container div {
-      font-size: 20px;
-      margin-top: 10px;
-      color: #34495e;
-    }
     button {
-      padding: 10px 20px;
-      font-size: 16px;
+      margin-top: 20px;
+      padding: 12px 24px;
+      font-size: 18px;
       background-color: #2980b9;
       color: white;
       border: none;
-      border-radius: 5px;
+      border-radius: 8px;
       cursor: pointer;
+    }
+    #label-container {
       margin-top: 20px;
+      font-size: 18px;
+      color: #2c3e50;
     }
   </style>
 </head>
 <body>
-  <h1>八段錦姿勢辨識</h1>
-  <button type="button" onclick="init()">開始辨識</button>
+  <h1>八段錦姿勢辨識系統</h1>
+  <button onclick="init()">開始辨識</button>
   <div><canvas id="canvas"></canvas></div>
   <div id="label-container"></div>
 
@@ -48,12 +52,13 @@
       const modelURL = "model/model.json";
       const metadataURL = "model/metadata.json";
 
+      // 載入 Teachable Machine 模型
       model = await tmPose.load(modelURL, metadataURL);
       maxPredictions = model.getTotalClasses();
 
+      // 初始化 webcam
       const size = 400;
-      const flip = true;
-      webcam = new tmPose.Webcam(size, size, flip);
+      webcam = new tmPose.Webcam(size, size, true); // flip: true
       await webcam.setup();
       await webcam.play();
 
