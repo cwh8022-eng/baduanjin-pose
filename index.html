@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦極簡辨識（3.x 別名修正）</title>
+  <title>八段錦極簡辨識（tfjs 1.7.4）</title>
 
-  <!-- tfjs 3.11.0（或 3.9.0 也可） -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
-  <!-- tmPose 0.8 UMD -->
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <!-- ★ 必須：tfjs 1.7.4（原生含 tf.fromPixels），加參數避免快取 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js?v=tf174"></script>
+  <!-- ★ tmPose 0.8（UMD 版） -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
 
   <style>
     body{font-family:Arial,sans-serif;text-align:center;background:#f6f8fb;margin:0;padding:24px}
@@ -24,13 +24,15 @@
   <h1>八段錦極簡辨識</h1>
   <div id="ver"></div>
   <div id="err"></div>
-  <button id="startBtn">啟動辨識</button><br>
+  <button id="startBtn">啟動辨識</button><br/>
   <canvas id="canvas" width="400" height="400"></canvas>
   <div id="label-container"></div>
 
   <script>
+    // 顯示 tfjs 版本與 fromPixels 是否存在（1.x 應為 true）
     document.getElementById('ver').textContent =
-      "tfjs 版本：" + (tf?.version?.tfjs ?? "未載入");
+      "tfjs 版本：" + (tf?.version?.tfjs ?? "未載入") +
+      "；has tf.fromPixels = " + (typeof tf.fromPixels === "function");
 
     const MODEL_ROOT = "https://teachablemachine.withgoogle.com/models/jX4OKw-11/";
     let model, webcam, ctx, labelContainer, maxPredictions;
@@ -42,32 +44,26 @@
       errEl.textContent = "";
 
       try {
-        // ① backend 準備
-        await tf.setBackend('webgl');           // 若有問題改 'cpu'
+        // ① backend 準備（1.x 也支援 setBackend）
+        await tf.setBackend('webgl');          // 若顯卡/權限問題，用 'cpu'
         await tf.ready();
+        console.log("backend =", tf.getBackend(),
+                    "tf.fromPixels =", typeof tf.fromPixels);
 
-        // ② ★ 關鍵：在 tfjs 3.x 動態補 tf.fromPixels（tmPose 內部會用到）
-        if (typeof tf.fromPixels !== "function" &&
-            tf.browser && typeof tf.browser.fromPixels === "function") {
-          tf.fromPixels = tf.browser.fromPixels;
-          console.log("shim applied: tf.fromPixels -> tf.browser.fromPixels");
-        }
-        console.log("backend =", tf.getBackend(), "has tf.fromPixels =", typeof tf.fromPixels === "function");
-
-        // ③ 載入模型
+        // ② 載入模型
         const modelURL = MODEL_ROOT + "model.json";
         const metadataURL = MODEL_ROOT + "metadata.json";
         model = await tmPose.load(modelURL, metadataURL);
         maxPredictions = model.getTotalClasses();
 
-        // ④ 啟用攝影機
+        // ③ 啟用攝影機（需 HTTPS 或 localhost）
         const size = 400;
         webcam = new tmPose.Webcam(size, size, true);
-        await webcam.setup();     // 允許相機
+        await webcam.setup();  // 會跳出相機權限
         await webcam.play();
         requestAnimationFrame(loop);
 
-        // ⑤ 畫布/標籤
+        // ④ 畫布/標籤
         const canvas = document.getElementById("canvas");
         ctx = canvas.getContext("2d");
         labelContainer = document.getElementById("label-container");
