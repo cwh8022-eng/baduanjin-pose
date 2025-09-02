@@ -5,7 +5,7 @@
   <title>八段錦動作辨識系統</title>
 
   <!-- 必須先載入 TensorFlow.js -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0"></script>
 
   <!-- 再載入 Teachable Machine Pose 模組 -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
@@ -56,13 +56,15 @@
 <body>
   <h1>八段錦動作辨識系統</h1>
   <p>請開啟攝影機並執行八段錦動作，本系統將即時辨識姿勢正確與否。</p>
-  <button onclick="init()">開始辨識</button>
+  <button id="startButton">開始辨識</button>
   <div id="webcam-container"></div>
   <div id="label-container"></div>
   <div id="error-message"></div>
 
   <script type="text/javascript">
     let model, webcam, labelContainer, maxPredictions;
+
+    document.getElementById("startButton").addEventListener("click", init);
 
     async function init() {
       const URL = "./";
@@ -82,6 +84,7 @@
 
         document.getElementById("webcam-container").appendChild(webcam.canvas);
         labelContainer = document.getElementById("label-container");
+        labelContainer.innerHTML = ""; // 清空舊資料
         for (let i = 0; i < maxPredictions; i++) {
           labelContainer.appendChild(document.createElement("div"));
         }
