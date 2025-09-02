@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦極簡辨識（tfjs 1.7.4 穩定版）</title>
+  <title>八段錦極簡辨識（tfjs 1.7.4）</title>
 
-  <!-- ★ 關鍵：tfjs 1.7.4（原生含 tf.fromPixels） -->
+  <!-- ★ 關鍵：tfjs 1.7.4，原生含 tf.fromPixels -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js?v=tf174"></script>
   <!-- tmPose 0.8（UMD） -->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js?v=tm08"></script>
@@ -29,7 +29,7 @@
   <div id="label-container"></div>
 
   <script>
-    // 顯示版本並確認 fromPixels 存在（1.7.4 應為 true）
+    // 顯示版本（應看到 1.7.4 並且 tf.fromPixels 為 function）
     document.getElementById('ver').textContent =
       "tfjs 版本：" + (tf?.version?.tfjs ?? "未載入") +
       "；has tf.fromPixels = " + (typeof tf.fromPixels === "function");
@@ -44,28 +44,26 @@
       errEl.textContent = "";
 
       try {
-        // ① backend 準備（1.x 也支援 setBackend）
-        try {
-          await tf.setBackend('webgl');
-        } catch { await tf.setBackend('cpu'); }
+        // backend 準備（1.x 亦可）
+        try { await tf.setBackend('webgl'); } catch { await tf.setBackend('cpu'); }
         await tf.ready();
         console.log("backend =", tf.getBackend(),
                     "tf.fromPixels =", typeof tf.fromPixels);
 
-        // ② 載入模型
+        // 載入模型
         const modelURL = MODEL_ROOT + "model.json";
         const metadataURL = MODEL_ROOT + "metadata.json";
         model = await tmPose.load(modelURL, metadataURL);
         maxPredictions = model.getTotalClasses();
 
-        // ③ 啟用攝影機（需 HTTPS 或 localhost）
+        // 啟用攝影機（需 HTTPS 或 localhost）
         const size = 400;
         webcam = new tmPose.Webcam(size, size, true);
-        await webcam.setup();  // 會跳相機權限
+        await webcam.setup();
         await webcam.play();
         requestAnimationFrame(loop);
 
-        // ④ 畫布/標籤
+        // 畫布/標籤
         const canvas = document.getElementById("canvas");
         ctx = canvas.getContext("2d");
         labelContainer = document.getElementById("label-container");
@@ -76,7 +74,7 @@
       } catch (e) {
         console.error(e);
         errEl.textContent = "⚠️ 無法啟動：" + e.message +
-          "（請確認 HTTPS/localhost、允許相機；如仍異常，開無痕視窗）";
+          "（請確認 HTTPS/localhost、允許相機；仍異常請用無痕視窗）";
       }
     }
 
