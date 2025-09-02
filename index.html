@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Teachable Machine - 八段錦動作辨識</title>
 
-  <!-- ✅ 最新 TensorFlow.js -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
+  <!-- ✅ 改用相容版本的 TensorFlow.js v3.21.0 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
 
-  <!-- ✅ Teachable Machine Pose 最新版 -->
+  <!-- ✅ 使用舊版 Teachable Machine Pose（仍維持 @0.8）-->
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
   <style>
@@ -18,65 +18,48 @@
       text-align: center;
       padding: 20px;
     }
-    canvas {
-      border: 2px solid #333;
-      margin-top: 20px;
+    #webcam-container {
+      margin: 20px auto;
     }
-    button {
-      margin-top: 20px;
-      padding: 12px 24px;
-      font-size: 18px;
-      background-color: #2980b9;
-      color: white;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-    }
-    #label-container {
-      margin-top: 20px;
-      font-size: 18px;
-      color: #2c3e50;
+    #label-container div {
+      font-size: 20px;
+      margin-top: 10px;
+      color: #333;
     }
   </style>
 </head>
 <body>
-  <h1>八段錦姿勢辨識系統</h1>
-  <button onclick="init()">開始辨識</button>
-  <div><canvas id="canvas"></canvas></div>
+  <h1>八段錦動作辨識</h1>
+  <button type="button" onclick="init()">開始辨識</button>
+  <div id="webcam-container"></div>
   <div id="label-container"></div>
 
   <script type="text/javascript">
     let model, webcam, ctx, labelContainer, maxPredictions;
 
     async function init() {
-      const modelURL = "model/model.json";
-      const metadataURL = "model/metadata.json";
+      const URL = "model/";
+      const modelURL = URL + "model.json";
+      const metadataURL = URL + "metadata.json";
 
-      // 載入 Teachable Machine 模型
       model = await tmPose.load(modelURL, metadataURL);
       maxPredictions = model.getTotalClasses();
 
-      // 初始化 webcam
       const size = 400;
-      webcam = new tmPose.Webcam(size, size, true); // flip: true
+      const flip = true;
+      webcam = new tmPose.Webcam(size, size, flip);
       await webcam.setup();
       await webcam.play();
-
       window.requestAnimationFrame(loop);
 
-      const canvas = document.getElementById("canvas");
-      canvas.width = size;
-      canvas.height = size;
-      ctx = canvas.getContext("2d");
-
+      document.getElementById("webcam-container").appendChild(webcam.canvas);
       labelContainer = document.getElementById("label-container");
-      labelContainer.innerHTML = "";
       for (let i = 0; i < maxPredictions; i++) {
         labelContainer.appendChild(document.createElement("div"));
       }
     }
 
-    async function loop() {
+    async function loop(timestamp) {
       webcam.update();
       await predict();
       window.requestAnimationFrame(loop);
@@ -85,9 +68,6 @@
     async function predict() {
       const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
       const prediction = await model.predict(posenetOutput);
-
-      ctx.drawImage(webcam.canvas, 0, 0);
-      tmPose.drawPose(pose, ctx);
 
       for (let i = 0; i < maxPredictions; i++) {
         const classPrediction =
