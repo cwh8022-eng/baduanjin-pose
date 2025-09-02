@@ -1,3 +1,5 @@
+# 📄 將此程式存成 build_index.py 或直接執行在 Python 環境中
+html_content = """
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -5,14 +7,46 @@
   <title>八段錦動作辨識系統</title>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
   <style>
-    body { font-family: 'Noto Sans TC', sans-serif; text-align: center; background-color: #f0f4f8; padding: 40px; }
-    h1 { color: #2c3e50; }
-    p { font-size: 18px; color: #555; }
-    canvas { margin-top: 20px; border: 2px solid #2c3e50; }
-    #label-container div { margin-top: 10px; font-size: 20px; color: #16a085; }
-    button { padding: 10px 20px; font-size: 18px; background-color: #27ae60; color: white; border: none; border-radius: 8px; cursor: pointer; margin-top: 20px; }
-    button:hover { background-color: #219150; }
-    #error-message { color: red; font-weight: bold; margin-top: 20px; }
+    body {
+      font-family: 'Noto Sans TC', sans-serif;
+      background-color: #f0f4f8;
+      text-align: center;
+      padding: 40px;
+    }
+    h1 {
+      color: #2c3e50;
+    }
+    p {
+      font-size: 18px;
+      color: #555;
+    }
+    canvas {
+      margin-top: 20px;
+      border: 2px solid #2c3e50;
+    }
+    #label-container div {
+      font-size: 20px;
+      margin-top: 10px;
+      color: #16a085;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 18px;
+      background-color: #27ae60;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+    button:hover {
+      background-color: #219150;
+    }
+    #error-message {
+      color: red;
+      font-weight: bold;
+      margin-top: 20px;
+    }
   </style>
 </head>
 <body>
@@ -38,8 +72,7 @@
         const size = 400;
         const flip = true;
         webcam = new tmPose.Webcam(size, size, flip);
-
-        await webcam.setup(); // 要求相機權限
+        await webcam.setup();
         await webcam.play();
         window.requestAnimationFrame(loop);
 
@@ -50,8 +83,8 @@
         }
       } catch (error) {
         console.error("Camera error:", error);
-        document.getElementById("error-message").innerText = 
-          "⚠️ 錯誤：無法開啟攝影機。請確認權限、瀏覽器支援與 HTTPS 設定。";
+        document.getElementById("error-message").innerText =
+          "⚠️ 錯誤：無法開啟攝影機。請確認權限、瀏覽器支援與 HTTPS 或 localhost。";
       }
     }
 
@@ -73,3 +106,10 @@
   </script>
 </body>
 </html>
+"""
+
+# 儲存成 index.html
+with open("index.html", "w", encoding="utf-8") as f:
+    f.write(html_content)
+
+print("✅ index.html 已成功建立（支援錯誤處理與 HTTPS 啟用攝影機）")
