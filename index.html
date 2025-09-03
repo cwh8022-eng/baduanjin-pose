@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識（預檢＋SHA-256）</title>
+  <title>八段錦動作辨識（骨架對齊修正版）</title>
 
-  <!-- 與 tmPose 相容且內建 tf.fromPixels -->
+  <!-- 與 tmPose 最相容 -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
@@ -28,178 +28,146 @@
     .bar { height:100%; width:0%; background:linear-gradient(90deg,#34d399,#10b981); color:#fff; line-height:22px; text-align:right; padding-right:8px; font-size:12px; font-weight:600; transition:width .18s ease; }
     .cls { position:absolute; right:8px; top:-18px; font-size:11px; color:#6b7280; }
     .log { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; color:#334155; text-align:left; background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:10px; margin:0 auto 12px; width:min(var(--w),96vw); }
-    .ok { color:#065f46; } .bad { color:#991b1b; }
-    .muted { color:#6b7280; }
+    .ok { color:#065f46; } .bad { color:#991b1b; } .muted { color:#6b7280; }
+    #msg{white-space:pre-line;font-weight:700;color:#c0392b;text-align:center;margin:8px 0 12px}
   </style>
 </head>
 <body>
   <h1>八段錦動作辨識</h1>
-  <div class="hint">流程：① 先「檢查模型檔」→ ② 確認長度與 SHA-256 → ③ 「啟動辨識」。請以 HTTPS/localhost 開啟並允許攝影機。</div>
+  <div class="hint">流程：①先「檢查模型檔」→ ② 確認長度與 SHA-256 → ③ 「啟動辨識」。請以 HTTPS/localhost 開啟並允許攝影機。</div>
 
   <div class="btns">
     <button onclick="preflightCheck()">🔍 檢查模型檔（含 SHA-256）</button>
-    <button onclick="init()">▶️ 啟動辨識</button>
+    <button id="btnStart">▶️ 啟動辨識</button>
   </div>
   <div id="preflightLog" class="log" style="display:none;"></div>
+  <div id="msg"></div>
 
   <div class="wrap">
     <div class="stage">
+      <!-- 重要：canvas 寬高要與 Webcam size 完全一致 -->
       <canvas id="canvas" width="400" height="400"></canvas>
       <div class="panel" id="list"></div>
     </div>
   </div>
 
 <script>
-  let model, webcam, ctx, maxPredictions;
-  let indexMap = null;      // { D1: 0, D2: 3, ... }
-  let classNames = [];
-  let BASE = null;
+let model, webcam, ctx, maxPredictions;
+let indexMap = null;
+let classNames = [];
+let BASE = null;
 
-  // 固定八式顯示順序
-  const TARGETS = [
-    { key: 'D1', name: '雙手托天理三焦' },
-    { key: 'D2', name: '左右開弓似射鵰' },
-    { key: 'D3', name: '調理脾胃須單舉' },
-    { key: 'D4', name: '五勞七傷往後瞧' },
-    { key: 'D5', name: '搖頭擺尾去心火' },
-    { key: 'D6', name: '兩手攀足固腎腰' },
-    { key: 'D7', name: '攢拳怒目增氣力' },
-    { key: 'D8', name: '背後七顛百病消' }
-  ];
+const TARGETS = [
+  { key: 'D1', name: '雙手托天理三焦' },
+  { key: 'D2', name: '左右開弓似射鵰' },
+  { key: 'D3', name: '調理脾胃須單舉' },
+  { key: 'D4', name: '五勞七傷往後瞧' },
+  { key: 'D5', name: '搖頭擺尾去心火' },
+  { key: 'D6', name: '兩手攀足固腎腰' },
+  { key: 'D7', name: '攢拳怒目增氣力' },
+  { key: 'D8', name: '背後七顛百病消' }
+];
 
-  // 常見關鍵詞 → 目標對應
-  const KEYWORD_MAP = [
-    { token:'雙手托天', target:'D1' }, { token:'托天', target:'D1' },
-    { token:'開弓', target:'D2' }, { token:'射雕', target:'D2' }, { token:'射鵰', target:'D2' },
-    { token:'單舉', target:'D3' }, { token:'脾胃', target:'D3' },
-    { token:'往後瞧', target:'D4' }, { token:'七傷', target:'D4' },
-    { token:'擺尾', target:'D5' }, { token:'去心火', target:'D5' },
-    { token:'攀足', target:'D6' }, { token:'腎腰', target:'D6' },
-    { token:'攢拳', target:'D7' }, { token:'增氣力', target:'D7' },
-    { token:'七顛', target:'D8' }, { token:'百病消', target:'D8' }
-  ];
+const KEYWORD_MAP = [
+  { token:'雙手托天', target:'D1' }, { token:'托天', target:'D1' },
+  { token:'開弓', target:'D2' }, { token:'射雕', target:'D2' }, { token:'射鵰', target:'D2' },
+  { token:'單舉', target:'D3' }, { token:'脾胃', target:'D3' },
+  { token:'往後瞧', target:'D4' }, { token:'七傷', target:'D4' },
+  { token:'擺尾', target:'D5' }, { token:'去心火', target:'D5' },
+  { token:'攀足', target:'D6' }, { token:'腎腰', target:'D6' },
+  { token:'攢拳', target:'D7' }, { token:'增氣力', target:'D7' },
+  { token:'七顛', target:'D8' }, { token:'百病消', target:'D8' }
+];
 
-  function normalizeLabel(s){
-    if(!s) return '';
-    return s.replace(/\s+/g,'')
-      .replace(/正確/g,'')
-      .replace(/[()（）\[\]【】：:，,。.\-_/]/g,'')
-      .replace(/雕/g,'鵰')
-      .toLowerCase();
-  }
-
-  function buildIndexMap(modelClassNames){
-    const map = {}; TARGETS.forEach(t=>map[t.key]=-1);
-    modelClassNames.forEach((name, idx)=>{
-      const n = normalizeLabel(name);
-      for(const rule of KEYWORD_MAP){
-        if(n.indexOf(rule.token)!==-1 && map[rule.target]===-1){
-          map[rule.target]=idx; break;
-        }
-      }
-      if(map.D1===-1 && /d1/.test(n)) map.D1=idx;
-      if(map.D2===-1 && /d2/.test(n)) map.D2=idx;
-      if(map.D3===-1 && /d3/.test(n)) map.D3=idx;
-      if(map.D4===-1 && /d4/.test(n)) map.D4=idx;
-      if(map.D5===-1 && /d5/.test(n)) map.D5=idx;
-      if(map.D6===-1 && /d6/.test(n)) map.D6=idx;
-      if(map.D7===-1 && /d7/.test(n)) map.D7=idx;
-      if(map.D8===-1 && /d8/.test(n)) map.D8=idx;
-    });
-    return map;
-  }
-
-  function buildUI(labels){
-    const list = document.getElementById('list');
-    list.innerHTML = '';
-    TARGETS.forEach((t, i)=>{
-      const row=document.createElement('div'); row.className='row';
-      const name=document.createElement('div'); name.className='name'; name.textContent = `${i+1}. ${t.name}`;
-      const track=document.createElement('div'); track.className='track';
-      const bar=document.createElement('div'); bar.className='bar'; bar.id=`bar-${t.key}`; bar.textContent='0.0%';
-      const cls=document.createElement('div'); cls.className='cls'; cls.id=`cls-${t.key}`; cls.textContent='';
-      track.appendChild(bar); track.appendChild(cls);
-      row.appendChild(name); row.appendChild(track);
-      list.appendChild(row);
-    });
-    if(indexMap){
-      TARGETS.forEach(t=>{
-        const idx=indexMap[t.key];
-        const label = (idx>=0 && labels[idx]) ? labels[idx] : '（未對應）';
-        const el = document.getElementById(`cls-${t.key}`);
-        if(el) el.textContent = label;
-      });
+function normalizeLabel(s){
+  if(!s) return '';
+  return s.replace(/\s+/g,'').replace(/正確/g,'').replace(/[()（）\[\]【】：:，,。.\-_/]/g,'').replace(/雕/g,'鵰').toLowerCase();
+}
+function buildIndexMap(modelClassNames){
+  const map = {}; TARGETS.forEach(t=>map[t.key]=-1);
+  modelClassNames.forEach((name, idx)=>{
+    const n = normalizeLabel(name);
+    for(const rule of KEYWORD_MAP){
+      if(n.indexOf(rule.token)!==-1 && map[rule.target]===-1){ map[rule.target]=idx; break; }
     }
+    for(let i=1;i<=8;i++){ if(map['D'+i]===-1 && /d${i}/.test ? new RegExp('d'+i).test(n) : n.indexOf('d'+i)!==-1) map['D'+i]=idx; }
+  });
+  return map;
+}
+function buildUI(labels){
+  const list = document.getElementById('list');
+  list.innerHTML = '';
+  TARGETS.forEach((t, i)=>{
+    const row=document.createElement('div'); row.className='row';
+    const name=document.createElement('div'); name.className='name'; name.textContent = `${i+1}. ${t.name}`;
+    const track=document.createElement('div'); track.className='track';
+    const bar=document.createElement('div'); bar.className='bar'; bar.id=`bar-${t.key}`; bar.textContent='0.0%';
+    const cls=document.createElement('div'); cls.className='cls'; cls.id=`cls-${t.key}`; cls.textContent='';
+    track.appendChild(bar); track.appendChild(cls);
+    row.appendChild(name); row.appendChild(track);
+    list.appendChild(row);
+  });
+  if(indexMap){
+    TARGETS.forEach(t=>{
+      const idx=indexMap[t.key];
+      const label = (idx>=0 && labels[idx]) ? labels[idx] : '（未對應）';
+      const el = document.getElementById(`cls-${t.key}`);
+      if(el) el.textContent = label;
+    });
   }
+}
 
-  // 文字輸出工具
-  function showLog(){ document.getElementById('preflightLog').style.display='block'; }
-  function logLine(s, cls=''){ const box=document.getElementById('preflightLog'); box.innerHTML += `<div class="${cls}">${s}</div>`; }
+function showLog(){ document.getElementById('preflightLog').style.display='block'; }
+function logLine(s, cls=''){ const box=document.getElementById('preflightLog'); box.innerHTML += `<div class="${cls}">${s}</div>`; }
+function toHex(uint8){ return Array.from(uint8).map(b=>b.toString(16).padStart(2,'0')).join(''); }
 
-  // bytes → hex 字串
-  function toHex(uint8){
-    return Array.from(uint8).map(b=>b.toString(16).padStart(2,'0')).join('');
+async function preflightCheck(){
+  const box = document.getElementById('preflightLog');
+  box.innerHTML=''; showLog(); logLine('開始檢查…');
+
+  BASE = location.origin + (location.pathname.endsWith('/') ? location.pathname : location.pathname.replace(/[^/]+$/, '/'));
+  const modelURL    = BASE + 'model.json?v=' + Date.now();
+  const metadataURL = BASE + 'metadata.json?v=' + Date.now();
+  const weightsURL  = BASE + 'weights.bin?v=' + Date.now();
+  logLine(JSON.stringify({modelURL, metadataURL, weightsURL}), 'muted');
+
+  try {
+    const mRes = await fetch(modelURL, {cache:'no-store'});
+    if (!mRes.ok) throw new Error(`model.json HTTP ${mRes.status}`);
+    const mJson = await mRes.json();
+    const manifestPaths = (mJson.weightsManifest && mJson.weightsManifest[0] && mJson.weightsManifest[0].paths) || [];
+    logLine(`✔ model.json 取得成功；manifest paths=${JSON.stringify(manifestPaths)}`, 'ok');
+
+    const wRes = await fetch(weightsURL, {cache:'no-store'});
+    if (!wRes.ok) throw new Error(`weights.bin(GET) HTTP ${wRes.status}`);
+    const buf = await wRes.arrayBuffer();
+    const byteLen = buf.byteLength;
+    logLine(`weights.bin 解壓後 byteLength = ${byteLen}`);
+    if (byteLen === 0 || (byteLen % 4) !== 0) throw new Error('weights.bin 解壓後長度不是 4 的倍數，檔案可能不完整。');
+
+    const digest = await crypto.subtle.digest('SHA-256', buf);
+    const shaHex = toHex(new Uint8Array(digest));
+    logLine(`SHA-256（線上 weights.bin）= <b>${shaHex}</b>`, 'ok');
+    logLine('✅ 預檢通過：請比對本機 weights.bin 的 SHA-256 是否相同，若相同即可啟動辨識。', 'ok');
+  } catch (e){
+    logLine('❌ 預檢失敗：' + e.message + '（請清快取重載或重新上傳檔案）', 'bad');
   }
+}
 
-  // 預檢（含 SHA-256）
-  async function preflightCheck(){
-    const box = document.getElementById('preflightLog');
-    box.innerHTML=''; showLog(); logLine('開始檢查…');
+document.getElementById('btnStart').onclick = init;
 
-    BASE = location.origin + (location.pathname.endsWith('/') ? location.pathname
-           : location.pathname.replace(/[^/]+$/, '/'));
-    const modelURL    = BASE + 'model.json?v=' + Date.now();
-    const metadataURL = BASE + 'metadata.json?v=' + Date.now();
-    const weightsURL  = BASE + 'weights.bin?v=' + Date.now();
-    logLine(JSON.stringify({modelURL, metadataURL, weightsURL}), 'muted');
+async function init(){
+  const msg = document.getElementById('msg'); msg.textContent='';
+  BASE = BASE || (location.origin + (location.pathname.endsWith('/') ? location.pathname : location.pathname.replace(/[^/]+$/,'/')));
+  const modelURL    = BASE + 'model.json';
+  const metadataURL = BASE + 'metadata.json';
 
-    try {
-      // 1) model.json
-      const mRes = await fetch(modelURL, {cache:'no-store'});
-      if (!mRes.ok) throw new Error(`model.json HTTP ${mRes.status}`);
-      const mJson = await mRes.json();
-      const manifestPaths = (mJson.weightsManifest && mJson.weightsManifest[0] && mJson.weightsManifest[0].paths) || [];
-      logLine(`✔ model.json 取得成功；manifest paths=${JSON.stringify(manifestPaths)}`, 'ok');
-
-      // 2) weights.bin（用 arrayBuffer 檢查「解壓後」位元組長度）
-      const wRes = await fetch(weightsURL, {cache:'no-store'});
-      if (!wRes.ok) throw new Error(`weights.bin(GET) HTTP ${wRes.status}`);
-      const buf = await wRes.arrayBuffer();
-      const byteLen = buf.byteLength;
-      logLine(`weights.bin 解壓後 byteLength = ${byteLen}`);
-      if (byteLen === 0 || (byteLen % 4) !== 0) {
-        throw new Error('weights.bin 解壓後長度不是 4 的倍數，檔案可能不完整。');
-      }
-
-      // 3) SHA-256
-      const digest = await crypto.subtle.digest('SHA-256', buf);
-      const shaHex = toHex(new Uint8Array(digest));
-      logLine(`SHA-256（線上 weights.bin）= <b>${shaHex}</b>`, 'ok');
-      logLine('✅ 預檢通過：請比對本機 weights.bin 的 SHA-256 是否相同，若相同即可啟動辨識。', 'ok');
-
-      // 額外展示前 16 bytes（除錯用）
-      const head16 = new Uint8Array(buf.slice(0, 16));
-      logLine('前 16 bytes：[' + Array.from(head16).join(', ') + ']', 'muted');
-
-      // 顯示本機端如何計算 SHA-256
-      logLine('本機檔案 SHA-256 計算方式：', 'muted');
-      logLine('Windows PowerShell：  Get-FileHash -Algorithm SHA256 .\\weights.bin', 'muted');
-      logLine('macOS / Linux：      shasum -a 256 weights.bin', 'muted');
-    } catch (e){
-      logLine('❌ 預檢失敗：' + e.message + '（請清快取重載或重新上傳檔案）', 'bad');
-    }
-  }
-
-  // 啟動 tmPose
-  async function init(){
-    BASE = BASE || (location.origin + (location.pathname.endsWith('/') ? location.pathname : location.pathname.replace(/[^/]+$/,'/')));
-    const modelURL    = BASE + 'model.json';
-    const metadataURL = BASE + 'metadata.json';
-    console.log('[model paths]', {modelURL, metadataURL});
-
+  try{
+    // 1) 載入模型
     model = await tmPose.load(modelURL, metadataURL);
     maxPredictions = model.getTotalClasses();
 
+    // labels 對應
     let labels=[];
     try{
       const meta = await fetch(metadataURL, {cache:'no-store'}).then(r=>r.json());
@@ -207,55 +175,58 @@
       labels = raw.map(x => (x && x.label) ? x.label : (typeof x==='string' ? x : ''));
     }catch(_){}
     if(!labels.length) labels = new Array(maxPredictions).fill('');
-
     indexMap = buildIndexMap(labels);
     classNames = labels.slice();
     buildUI(classNames);
 
+    // 2) 建立 webcam；flip=true 交給 tmPose 處理鏡像
     const size=400, flip=true;
     webcam = new tmPose.Webcam(size, size, flip);
     await webcam.setup();
     await webcam.play();
 
+    // 3) 畫布尺寸 = size（關鍵）
     const canvas=document.getElementById('canvas');
+    canvas.width = size; canvas.height = size;
     ctx=canvas.getContext('2d');
 
-    window.requestAnimationFrame(loop);
+    msg.textContent = '✅ 模型與相機啟動成功！'; msg.className='ok';
+    requestAnimationFrame(loop);
+  }catch(e){
+    msg.textContent = '❌ 無法啟動：\n' + (e.message || e.toString());
+    msg.className='';
+    console.error(e);
+  }
+}
+
+async function loop(){
+  webcam.update();
+  await predict();
+  requestAnimationFrame(loop);
+}
+
+async function predict(){
+  // ★ 關鍵：用 webcam.canvas 來推論與繪製，與骨架座標完全一致
+  const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+  const prediction = await model.predict(posenetOutput);
+
+  // 同一張來源畫到你的 canvas，確保縮放一致
+  ctx.drawImage(webcam.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height);
+
+  if(pose){
+    tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
+    tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
   }
 
-  async function loop(){
-    webcam.update();
-    await predict();
-    window.requestAnimationFrame(loop);
+  // 更新 8 招條
+  for(const t of TARGETS){
+    const idx = indexMap ? indexMap[t.key] : -1;
+    const p = (idx>=0 && prediction[idx]) ? (prediction[idx].probability || 0) : 0;
+    const pct = (p*100).toFixed(1) + '%';
+    const bar = document.getElementById(`bar-${t.key}`);
+    if(bar){ bar.style.width = pct; bar.textContent = pct; }
   }
-
-  async function predict(){
-    const videoEl = webcam && webcam.webcam;
-    if(!videoEl || videoEl.readyState < 2) return;
-
-    const { pose, posenetOutput } = await model.estimatePose(videoEl);
-    const prediction = await model.predict(posenetOutput);
-
-    if(!classNames.filter(Boolean).length){
-      classNames = prediction.map(p => p.className || '');
-      indexMap = buildIndexMap(classNames);
-      buildUI(classNames);
-    }
-
-    ctx.drawImage(videoEl, 0, 0, ctx.canvas.width, ctx.canvas.height);
-    if(pose){
-      tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
-      tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
-    }
-
-    for(const t of TARGETS){
-      const idx = indexMap ? indexMap[t.key] : -1;
-      const p = (idx>=0 && prediction[idx]) ? (prediction[idx].probability || 0) : 0;
-      const pct = (p*100).toFixed(1) + '%';
-      const bar = document.getElementById(`bar-${t.key}`);
-      if(bar){ bar.style.width = pct; bar.textContent = pct; }
-    }
-  }
+}
 </script>
 </body>
 </html>
