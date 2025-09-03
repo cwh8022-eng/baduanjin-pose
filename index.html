@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>八段錦動作辨識（含預檢工具）</title>
+  <title>八段錦動作辨識（預檢＋SHA-256）</title>
 
   <!-- 與 tmPose 相容且內建 tf.fromPixels -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
@@ -22,21 +22,22 @@
     canvas { width:min(420px, 96vw); height:auto; border-radius:12px; border:2px solid #334155; background:#000; }
     .panel { flex:1 1 420px; min-width:320px; }
 
-    /* 清單：左固定名稱 + 右進度條 + 小字模型名 */
     .row { display:grid; grid-template-columns: 180px 1fr; gap:12px; align-items:center; margin:10px 0; }
     .name { font-weight:700; color:#374151; }
     .track { position:relative; background:#e5e7eb; border-radius:999px; overflow:hidden; height:22px; box-shadow: inset 0 1px 1px rgba(0,0,0,.06);}
     .bar { height:100%; width:0%; background:linear-gradient(90deg,#34d399,#10b981); color:#fff; line-height:22px; text-align:right; padding-right:8px; font-size:12px; font-weight:600; transition:width .18s ease; }
     .cls { position:absolute; right:8px; top:-18px; font-size:11px; color:#6b7280; }
     .log { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; color:#334155; text-align:left; background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:10px; margin:0 auto 12px; width:min(var(--w),96vw); }
+    .ok { color:#065f46; } .bad { color:#991b1b; }
+    .muted { color:#6b7280; }
   </style>
 </head>
 <body>
   <h1>八段錦動作辨識</h1>
-  <div class="hint">步驟：① 先「檢查模型檔」通過 → ② 再「啟動辨識」。請以 HTTPS 或 localhost 開啟並允許攝影機。</div>
+  <div class="hint">流程：① 先「檢查模型檔」→ ② 確認長度與 SHA-256 → ③ 「啟動辨識」。請以 HTTPS/localhost 開啟並允許攝影機。</div>
 
   <div class="btns">
-    <button onclick="preflightCheck()">🔍 檢查模型檔</button>
+    <button onclick="preflightCheck()">🔍 檢查模型檔（含 SHA-256）</button>
     <button onclick="init()">▶️ 啟動辨識</button>
   </div>
   <div id="preflightLog" class="log" style="display:none;"></div>
@@ -50,11 +51,11 @@
 
 <script>
   let model, webcam, ctx, maxPredictions;
-  let indexMap = null;      // { D1: 0, D2: 3, ... }（target -> model index）
-  let classNames = [];      // 模型回傳的 className
+  let indexMap = null;      // { D1: 0, D2: 3, ... }
+  let classNames = [];
   let BASE = null;
 
-  // 固定顯示的八式（順序）
+  // 固定八式顯示順序
   const TARGETS = [
     { key: 'D1', name: '雙手托天理三焦' },
     { key: 'D2', name: '左右開弓似射鵰' },
@@ -66,7 +67,7 @@
     { key: 'D8', name: '背後七顛百病消' }
   ];
 
-  // 關鍵詞 -> 對應哪一招（盡量包常見寫法）
+  // 常見關鍵詞 → 目標對應
   const KEYWORD_MAP = [
     { token:'雙手托天', target:'D1' }, { token:'托天', target:'D1' },
     { token:'開弓', target:'D2' }, { token:'射雕', target:'D2' }, { token:'射鵰', target:'D2' },
@@ -80,8 +81,7 @@
 
   function normalizeLabel(s){
     if(!s) return '';
-    return s
-      .replace(/\s+/g,'')
+    return s.replace(/\s+/g,'')
       .replace(/正確/g,'')
       .replace(/[()（）\[\]【】：:，,。.\-_/]/g,'')
       .replace(/雕/g,'鵰')
@@ -122,8 +122,6 @@
       row.appendChild(name); row.appendChild(track);
       list.appendChild(row);
     });
-
-    // 在每條右上角顯示實際對到的模型類別名
     if(indexMap){
       TARGETS.forEach(t=>{
         const idx=indexMap[t.key];
@@ -134,44 +132,65 @@
     }
   }
 
-  // －－－ 預檢工具 －－－
-  function logPreflight(msg){
-    const box = document.getElementById('preflightLog');
-    box.style.display='block';
-    box.innerHTML += (typeof msg==='string' ? msg : JSON.stringify(msg)) + '<br/>';
+  // 文字輸出工具
+  function showLog(){ document.getElementById('preflightLog').style.display='block'; }
+  function logLine(s, cls=''){ const box=document.getElementById('preflightLog'); box.innerHTML += `<div class="${cls}">${s}</div>`; }
+
+  // bytes → hex 字串
+  function toHex(uint8){
+    return Array.from(uint8).map(b=>b.toString(16).padStart(2,'0')).join('');
   }
+
+  // 預檢（含 SHA-256）
   async function preflightCheck(){
-    document.getElementById('preflightLog').innerHTML=''; logPreflight('開始檢查…');
-    BASE = location.origin + (location.pathname.endsWith('/') ? location.pathname : location.pathname.replace(/[^/]+$/,'/'));
-    const modelURL   = BASE + 'model.json';
-    const metadataURL= BASE + 'metadata.json';
-    const weightsURL = BASE + 'weights.bin';
-    logPreflight({modelURL, metadataURL, weightsURL});
+    const box = document.getElementById('preflightLog');
+    box.innerHTML=''; showLog(); logLine('開始檢查…');
+
+    BASE = location.origin + (location.pathname.endsWith('/') ? location.pathname
+           : location.pathname.replace(/[^/]+$/, '/'));
+    const modelURL    = BASE + 'model.json?v=' + Date.now();
+    const metadataURL = BASE + 'metadata.json?v=' + Date.now();
+    const weightsURL  = BASE + 'weights.bin?v=' + Date.now();
+    logLine(JSON.stringify({modelURL, metadataURL, weightsURL}), 'muted');
 
     try {
+      // 1) model.json
       const mRes = await fetch(modelURL, {cache:'no-store'});
-      if(!mRes.ok) throw new Error(`model.json HTTP ${mRes.status}`);
+      if (!mRes.ok) throw new Error(`model.json HTTP ${mRes.status}`);
       const mJson = await mRes.json();
-      logPreflight('✔ model.json 取得成功；manifest paths=' + JSON.stringify((mJson.weightsManifest && mJson.weightsManifest[0] && mJson.weightsManifest[0].paths)||[]));
+      const manifestPaths = (mJson.weightsManifest && mJson.weightsManifest[0] && mJson.weightsManifest[0].paths) || [];
+      logLine(`✔ model.json 取得成功；manifest paths=${JSON.stringify(manifestPaths)}`, 'ok');
 
-      // 先以 HEAD 取長度
-      const wHead = await fetch(weightsURL, {method:'HEAD', cache:'no-store'});
-      if(!wHead.ok) throw new Error(`weights.bin(HEAD) HTTP ${wHead.status}`);
-      const len = Number(wHead.headers.get('content-length')||0);
-      logPreflight('weights.bin content-length = ' + len);
-      if(!len || len%4!==0) throw new Error('weights.bin 大小不是 4 的倍數，可能上傳不完整。');
-
-      // 再 GET 一次驗證可讀
+      // 2) weights.bin（用 arrayBuffer 檢查「解壓後」位元組長度）
       const wRes = await fetch(weightsURL, {cache:'no-store'});
-      if(!wRes.ok) throw new Error(`weights.bin(GET) HTTP ${wRes.status}`);
-      logPreflight('✔ weights.bin 下載可用');
-      logPreflight('✅ 預檢通過：可開始啟動辨識');
+      if (!wRes.ok) throw new Error(`weights.bin(GET) HTTP ${wRes.status}`);
+      const buf = await wRes.arrayBuffer();
+      const byteLen = buf.byteLength;
+      logLine(`weights.bin 解壓後 byteLength = ${byteLen}`);
+      if (byteLen === 0 || (byteLen % 4) !== 0) {
+        throw new Error('weights.bin 解壓後長度不是 4 的倍數，檔案可能不完整。');
+      }
+
+      // 3) SHA-256
+      const digest = await crypto.subtle.digest('SHA-256', buf);
+      const shaHex = toHex(new Uint8Array(digest));
+      logLine(`SHA-256（線上 weights.bin）= <b>${shaHex}</b>`, 'ok');
+      logLine('✅ 預檢通過：請比對本機 weights.bin 的 SHA-256 是否相同，若相同即可啟動辨識。', 'ok');
+
+      // 額外展示前 16 bytes（除錯用）
+      const head16 = new Uint8Array(buf.slice(0, 16));
+      logLine('前 16 bytes：[' + Array.from(head16).join(', ') + ']', 'muted');
+
+      // 顯示本機端如何計算 SHA-256
+      logLine('本機檔案 SHA-256 計算方式：', 'muted');
+      logLine('Windows PowerShell：  Get-FileHash -Algorithm SHA256 .\\weights.bin', 'muted');
+      logLine('macOS / Linux：      shasum -a 256 weights.bin', 'muted');
     } catch (e){
-      logPreflight('❌ 預檢失敗：'+e.message);
+      logLine('❌ 預檢失敗：' + e.message + '（請清快取重載或重新上傳檔案）', 'bad');
     }
   }
 
-  // －－－ 啟動辨識 －－－
+  // 啟動 tmPose
   async function init(){
     BASE = BASE || (location.origin + (location.pathname.endsWith('/') ? location.pathname : location.pathname.replace(/[^/]+$/,'/')));
     const modelURL    = BASE + 'model.json';
@@ -181,7 +200,6 @@
     model = await tmPose.load(modelURL, metadataURL);
     maxPredictions = model.getTotalClasses();
 
-    // 從 metadata 取得 labels（若沒有就空字串佔位）
     let labels=[];
     try{
       const meta = await fetch(metadataURL, {cache:'no-store'}).then(r=>r.json());
@@ -190,12 +208,10 @@
     }catch(_){}
     if(!labels.length) labels = new Array(maxPredictions).fill('');
 
-    // 建立映射與 UI
     indexMap = buildIndexMap(labels);
     classNames = labels.slice();
     buildUI(classNames);
 
-    // 設定 webcam
     const size=400, flip=true;
     webcam = new tmPose.Webcam(size, size, flip);
     await webcam.setup();
@@ -220,21 +236,18 @@
     const { pose, posenetOutput } = await model.estimatePose(videoEl);
     const prediction = await model.predict(posenetOutput);
 
-    // 若第一次沒有 labels，從 prediction 補齊後重建 UI
     if(!classNames.filter(Boolean).length){
       classNames = prediction.map(p => p.className || '');
       indexMap = buildIndexMap(classNames);
       buildUI(classNames);
     }
 
-    // 畫畫面與骨架
     ctx.drawImage(videoEl, 0, 0, ctx.canvas.width, ctx.canvas.height);
     if(pose){
       tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
       tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
     }
 
-    // 依固定八式順序更新進度條
     for(const t of TARGETS){
       const idx = indexMap ? indexMap[t.key] : -1;
       const p = (idx>=0 && prediction[idx]) ? (prediction[idx].probability || 0) : 0;
